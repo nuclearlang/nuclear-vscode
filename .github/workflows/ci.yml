@@ -23,6 +23,7 @@ jobs:
           path: nuclear/nuclear-vscode
       - name: The other repositories of the working tree
         run: |
+          git clone --depth 1 https://github.com/nuclearlang/dragonfly nuclear/dragonfly
           git clone --depth 1 https://github.com/nuclearlang/dragonfly-mobile nuclear/dragonfly-mobile
           git clone --depth 1 https://github.com/nuclearlang/dragonfly-backend nuclear/dragonfly-backend
           git clone --depth 1 https://github.com/nuclearlang/dragonfly-web nuclear/dragonfly-web
