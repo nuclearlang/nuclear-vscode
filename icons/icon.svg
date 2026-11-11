@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+<defs>
+  <clipPath id="disc"><circle cx="256" cy="256" r="256"/></clipPath>
+  <clipPath id="right"><rect x="256" y="0" width="256" height="512"/></clipPath>
+  <g id="sign"><path d="M156 82.79A200 200 0 0 1 356 82.79L295 188.45A78 78 0 0 0 217 188.45ZM456 256A200 200 0 0 1 356 429.21L295 323.55A78 78 0 0 0 334 256ZM156 429.21A200 200 0 0 1 56 256L178 256A78 78 0 0 0 217 323.55Z"/><circle cx="256" cy="256" r="64"/></g>
+</defs>
+<circle cx="256" cy="256" r="256" fill="#FDD83F"/>
+<g clip-path="url(#disc)" fill="#FBBE2C"><use href="#sign" x="6" y="6"/><use href="#sign" x="12" y="12"/><use href="#sign" x="18" y="18"/><use href="#sign" x="24" y="24"/><use href="#sign" x="30" y="30"/><use href="#sign" x="36" y="36"/><use href="#sign" x="42" y="42"/><use href="#sign" x="48" y="48"/><use href="#sign" x="54" y="54"/><use href="#sign" x="60" y="60"/><use href="#sign" x="66" y="66"/><use href="#sign" x="72" y="72"/><use href="#sign" x="78" y="78"/><use href="#sign" x="84" y="84"/><use href="#sign" x="90" y="90"/><use href="#sign" x="96" y="96"/><use href="#sign" x="102" y="102"/><use href="#sign" x="108" y="108"/><use href="#sign" x="114" y="114"/><use href="#sign" x="120" y="120"/><use href="#sign" x="126" y="126"/><use href="#sign" x="132" y="132"/><use href="#sign" x="138" y="138"/><use href="#sign" x="144" y="144"/><use href="#sign" x="150" y="150"/><use href="#sign" x="156" y="156"/><use href="#sign" x="162" y="162"/><use href="#sign" x="168" y="168"/><use href="#sign" x="174" y="174"/><use href="#sign" x="180" y="180"/><use href="#sign" x="186" y="186"/><use href="#sign" x="192" y="192"/><use href="#sign" x="198" y="198"/><use href="#sign" x="204" y="204"/><use href="#sign" x="210" y="210"/><use href="#sign" x="216" y="216"/><use href="#sign" x="222" y="222"/><use href="#sign" x="228" y="228"/><use href="#sign" x="234" y="234"/><use href="#sign" x="240" y="240"/><use href="#sign" x="246" y="246"/><use href="#sign" x="252" y="252"/><use href="#sign" x="258" y="258"/><use href="#sign" x="264" y="264"/><use href="#sign" x="270" y="270"/><use href="#sign" x="276" y="276"/><use href="#sign" x="282" y="282"/><use href="#sign" x="288" y="288"/></g>
+<path d="M156 82.79A200 200 0 0 1 356 82.79L295 188.45A78 78 0 0 0 217 188.45ZM456 256A200 200 0 0 1 356 429.21L295 323.55A78 78 0 0 0 334 256ZM156 429.21A200 200 0 0 1 56 256L178 256A78 78 0 0 0 217 323.55Z" fill="#37474F"/>
+<path d="M156 82.79A200 200 0 0 1 356 82.79L295 188.45A78 78 0 0 0 217 188.45ZM456 256A200 200 0 0 1 356 429.21L295 323.55A78 78 0 0 0 334 256ZM156 429.21A200 200 0 0 1 56 256L178 256A78 78 0 0 0 217 323.55Z" fill="#21303A" clip-path="url(#right)"/>
+<circle cx="256" cy="256" r="64" fill="#FFE33D"/>
+<circle cx="256" cy="256" r="64" fill="#FFC107" clip-path="url(#right)"/>
+<circle cx="256" cy="256" r="42" fill="#37474F"/>
+<circle cx="256" cy="256" r="42" fill="#21303A" clip-path="url(#right)"/>
+</svg>

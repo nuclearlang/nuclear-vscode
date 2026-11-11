@@ -1,0 +1,18 @@
+# build output and local tools (regenerated)
+target/
+build/
+dist/
+dist-test/
+node_modules/
+.venv/
+__pycache__/
+*.pyc
+.dart_tool/
+.pytest_cache/
+.nuclear/
+*.vsix
+*.sqlite
+.DS_Store
+out/
+server/
+icon-themes/

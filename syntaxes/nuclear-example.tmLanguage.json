@@ -1,0 +1,699 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Nuclear (code of an @example)",
+  "scopeName": "source.nuclear.example",
+  "patterns": [
+    {
+      "include": "#comment"
+    },
+    {
+      "include": "#use"
+    },
+    {
+      "include": "#decorator"
+    },
+    {
+      "include": "#declaration"
+    },
+    {
+      "include": "#statement"
+    }
+  ],
+  "repository": {
+    "comment": {
+      "patterns": [
+        {
+          "comment": "`//` at the start of a line continues on the following ` * ` lines (the `*` under the second `/`, spec: comments).",
+          "begin": "^([ \\t]*)(//)",
+          "beginCaptures": {
+            "2": {
+              "name": "comment.example.punctuation.definition.comment.nuclear"
+            }
+          },
+          "end": "^(?!\\1[ \\t]+\\S)",
+          "name": "comment.example.comment.block.indented.nuclear",
+          "patterns": [
+            {
+              "include": "#doc-tag"
+            }
+          ]
+        },
+        {
+          "begin": "(//)",
+          "beginCaptures": {
+            "1": {
+              "name": "comment.example.punctuation.definition.comment.nuclear"
+            }
+          },
+          "end": "$",
+          "name": "comment.example.comment.line.double-slash.nuclear",
+          "patterns": [
+            {
+              "include": "#doc-tag"
+            }
+          ]
+        }
+      ]
+    },
+    "use": {
+      "begin": "^\\s*(use)\\b",
+      "beginCaptures": {
+        "1": {
+          "name": "comment.example.keyword.control.import.nuclear"
+        }
+      },
+      "end": "$",
+      "patterns": [
+        {
+          "include": "#comment"
+        },
+        {
+          "match": "\\b(as|from)\\b",
+          "name": "comment.example.keyword.control.import.nuclear"
+        },
+        {
+          "match": "\\b(show|hide|deferred)\\b",
+          "name": "comment.example.keyword.other.use-clause.nuclear"
+        },
+        {
+          "include": "#string"
+        },
+        {
+          "match": "\\*",
+          "name": "comment.example.keyword.operator.wildcard.nuclear"
+        },
+        {
+          "match": "[{},]",
+          "name": "comment.example.punctuation.separator.nuclear"
+        },
+        {
+          "match": "@?[A-Za-z_][\\w]*(?:[/.\\-][A-Za-z_][\\w]*)*",
+          "name": "comment.example.entity.name.namespace.nuclear"
+        }
+      ]
+    },
+    "decorator": {
+      "match": "(@)([A-Za-z_]\\w*(?:\\.[A-Za-z_]\\w*)*)",
+      "captures": {
+        "0": {
+          "name": "comment.example.meta.decorator.nuclear"
+        },
+        "1": {
+          "name": "comment.example.punctuation.decorator.nuclear"
+        },
+        "2": {
+          "name": "comment.example.entity.name.function.decorator.nuclear"
+        }
+      }
+    },
+    "declaration": {
+      "patterns": [
+        {
+          "comment": "Header with words: `stateless Greeting(...)`, `extension X on String`, `static count`. Words before a PascalCase name are kinds.",
+          "match": "^\\s*((?:(?!(?:if|else|for|while|match|return|yield|throw|use|try|catch|finally|break|continue|not|and|or|in|is|as|true|false|null|this|super)\\b)[a-z_]\\w*\\s+)+)(~?)([A-Z]\\w*)",
+          "captures": {
+            "1": {
+              "name": "comment.example.storage.type.kind.nuclear"
+            },
+            "2": {
+              "name": "comment.example.keyword.control.await.nuclear"
+            },
+            "3": {
+              "name": "comment.example.entity.name.type.class.nuclear"
+            }
+          }
+        },
+        {
+          "comment": "Method with modifiers: `get color() Color`, `static create(x: int) User`.",
+          "match": "^\\s*((?:(?!(?:if|else|for|while|match|return|yield|throw|use|try|catch|finally|break|continue|not|and|or|in|is|as|true|false|null|this|super)\\b)[a-z_]\\w*\\s+)+)(~?)([a-z_]\\w*)(?=\\s*(?:<[^>]*>)?\\()",
+          "captures": {
+            "1": {
+              "name": "comment.example.storage.modifier.nuclear"
+            },
+            "2": {
+              "name": "comment.example.keyword.control.await.nuclear"
+            },
+            "3": {
+              "name": "comment.example.entity.name.function.nuclear"
+            }
+          }
+        },
+        {
+          "comment": "Module, enum or interface: a PascalCase name at the start of a line, not followed by `.` or `(`.",
+          "match": "^\\s*([A-Z]\\w*)(?=\\s*(?:<[^>]*>)?\\s*(?::|>|$|//))",
+          "captures": {
+            "1": {
+              "name": "comment.example.entity.name.type.class.nuclear"
+            }
+          }
+        },
+        {
+          "comment": "Function or method: `name(params) Type` followed by a block, `= expr` or the end of the line.",
+          "match": "^\\s*(~?)([a-z_]\\w*)(?=\\s*(?:<[^>]*>)?\\((?:[^()]|\\([^()]*\\))*\\)\\s*(?:[A-Za-z<(][^=]*)?\\s*(?:=(?![=>])|$|//))",
+          "captures": {
+            "1": {
+              "name": "comment.example.keyword.control.await.nuclear"
+            },
+            "2": {
+              "name": "comment.example.entity.name.function.nuclear"
+            }
+          }
+        },
+        {
+          "comment": "Field: `name: Type` or `name?: Type` at the start of a line.",
+          "match": "^\\s*((?:(?!(?:if|else|for|while|match|return|yield|throw|use|try|catch|finally)\\b)[a-z_]\\w*\\s+)*)([a-z_]\\w*)(\\??)\\s*(:)(?!\\s*$)",
+          "captures": {
+            "1": {
+              "name": "comment.example.storage.modifier.nuclear"
+            },
+            "2": {
+              "name": "comment.example.variable.other.property.nuclear"
+            },
+            "3": {
+              "name": "comment.example.keyword.operator.optional.nuclear"
+            },
+            "4": {
+              "name": "comment.example.punctuation.separator.type.nuclear"
+            }
+          }
+        }
+      ]
+    },
+    "statement": {
+      "patterns": [
+        {
+          "include": "#comment"
+        },
+        {
+          "include": "#cascade"
+        },
+        {
+          "include": "#keyword"
+        },
+        {
+          "include": "#string"
+        },
+        {
+          "include": "#number"
+        },
+        {
+          "include": "#decorator"
+        },
+        {
+          "include": "#call"
+        },
+        {
+          "include": "#named-arg"
+        },
+        {
+          "include": "#param"
+        },
+        {
+          "include": "#property"
+        },
+        {
+          "include": "#type"
+        },
+        {
+          "include": "#operator"
+        },
+        {
+          "include": "#punctuation"
+        },
+        {
+          "include": "#identifier"
+        }
+      ]
+    },
+    "keyword": {
+      "patterns": [
+        {
+          "match": "\\b(throw)\\b",
+          "name": "comment.example.keyword.control.throw.nuclear"
+        },
+        {
+          "match": "\\b(if|else|for|while|match|return|yield|break|continue|try|catch|finally)\\b",
+          "name": "comment.example.keyword.control.nuclear"
+        },
+        {
+          "match": "\\b(in)\\b",
+          "name": "comment.example.keyword.control.in.nuclear"
+        },
+        {
+          "match": "\\b(use|from)\\b",
+          "name": "comment.example.keyword.control.import.nuclear"
+        },
+        {
+          "match": "\\b(and|or|not|is|as)\\b",
+          "name": "comment.example.keyword.operator.word.nuclear"
+        },
+        {
+          "match": "\\b(true|false)\\b",
+          "name": "comment.example.constant.language.boolean.nuclear"
+        },
+        {
+          "match": "\\b(null)\\b",
+          "name": "comment.example.constant.language.null.nuclear"
+        },
+        {
+          "match": "\\b(this)\\b",
+          "name": "comment.example.variable.language.this.nuclear"
+        },
+        {
+          "match": "\\b(super)\\b",
+          "name": "comment.example.variable.language.super.nuclear"
+        },
+        {
+          "match": "(?<![\\w)\\]])_(?!\\w)",
+          "name": "comment.example.keyword.other.wildcard.nuclear"
+        },
+        {
+          "match": "~(?=\\s*[A-Za-z_$(])",
+          "name": "comment.example.keyword.control.await.nuclear"
+        }
+      ]
+    },
+    "string": {
+      "patterns": [
+        {
+          "begin": "r\"\"\"",
+          "end": "\"\"\"",
+          "name": "comment.example.string.quoted.triple.double.raw.nuclear"
+        },
+        {
+          "begin": "r'''",
+          "end": "'''",
+          "name": "comment.example.string.quoted.triple.single.raw.nuclear"
+        },
+        {
+          "begin": "r\"",
+          "end": "\"|$",
+          "name": "comment.example.string.quoted.double.raw.nuclear"
+        },
+        {
+          "begin": "r'",
+          "end": "'|$",
+          "name": "comment.example.string.quoted.single.raw.nuclear"
+        },
+        {
+          "begin": "\"\"\"",
+          "end": "\"\"\"",
+          "name": "comment.example.string.quoted.triple.double.nuclear",
+          "patterns": [
+            {
+              "include": "#string-content"
+            }
+          ]
+        },
+        {
+          "begin": "'''",
+          "end": "'''",
+          "name": "comment.example.string.quoted.triple.single.nuclear",
+          "patterns": [
+            {
+              "include": "#string-content"
+            }
+          ]
+        },
+        {
+          "begin": "\"",
+          "end": "\"|$",
+          "name": "comment.example.string.quoted.double.nuclear",
+          "patterns": [
+            {
+              "include": "#string-content"
+            }
+          ]
+        },
+        {
+          "begin": "'",
+          "end": "'|$",
+          "name": "comment.example.string.quoted.single.nuclear",
+          "patterns": [
+            {
+              "include": "#string-content"
+            }
+          ]
+        }
+      ]
+    },
+    "string-content": {
+      "patterns": [
+        {
+          "match": "\\\\(?:u\\{[0-9A-Fa-f]+\\}|[ntr0\\\\\"'$])",
+          "name": "comment.example.constant.character.escape.nuclear"
+        },
+        {
+          "match": "\\\\.",
+          "name": "comment.example.invalid.illegal.escape.nuclear"
+        },
+        {
+          "begin": "\\$\\{",
+          "beginCaptures": {
+            "0": {
+              "name": "comment.example.punctuation.definition.template-expression.begin.nuclear"
+            }
+          },
+          "end": "\\}",
+          "endCaptures": {
+            "0": {
+              "name": "comment.example.punctuation.definition.template-expression.end.nuclear"
+            }
+          },
+          "contentName": "comment.example.meta.embedded.line.nuclear",
+          "patterns": [
+            {
+              "include": "#expression-in-string"
+            }
+          ]
+        }
+      ]
+    },
+    "expression-in-string": {
+      "patterns": [
+        {
+          "include": "#keyword"
+        },
+        {
+          "include": "#string"
+        },
+        {
+          "include": "#number"
+        },
+        {
+          "include": "#call"
+        },
+        {
+          "include": "#property"
+        },
+        {
+          "include": "#type"
+        },
+        {
+          "include": "#operator"
+        },
+        {
+          "match": "[()\\[\\],]",
+          "name": "comment.example.punctuation.nuclear"
+        },
+        {
+          "include": "#identifier"
+        }
+      ]
+    },
+    "number": {
+      "patterns": [
+        {
+          "match": "\\b0x[0-9A-Fa-f_]+\\b",
+          "name": "comment.example.constant.numeric.hex.nuclear"
+        },
+        {
+          "match": "\\b0b[01_]+\\b",
+          "name": "comment.example.constant.numeric.binary.nuclear"
+        },
+        {
+          "match": "\\b\\d[\\d_]*(?:\\.\\d[\\d_]*)?(?:[eE][+-]?\\d[\\d_]*)?\\b",
+          "name": "comment.example.constant.numeric.decimal.nuclear"
+        }
+      ]
+    },
+    "call": {
+      "patterns": [
+        {
+          "comment": "Constructor or generic call: `Text(...)`, `GlobalKey<FormState>()`.",
+          "match": "\\b([A-Z]\\w*)(?=\\s*(?:<[^<>()]*(?:<[^<>()]*>)?[^<>()]*>)?\\()",
+          "captures": {
+            "1": {
+              "name": "comment.example.support.class.nuclear"
+            }
+          }
+        },
+        {
+          "match": "(?<!\\.)\\b([a-z_]\\w*)(?=\\s*(?:<[^<>()]*>)?\\()",
+          "captures": {
+            "1": {
+              "name": "comment.example.entity.name.function.call.nuclear"
+            }
+          }
+        },
+        {
+          "match": "(\\??\\.)\\s*([a-z_]\\w*)(?=\\s*(?:<[^<>()]*>)?\\()",
+          "captures": {
+            "1": {
+              "name": "comment.example.punctuation.accessor.nuclear"
+            },
+            "2": {
+              "name": "comment.example.entity.name.function.member.nuclear"
+            }
+          }
+        }
+      ]
+    },
+    "named-arg": {
+      "comment": "Named argument `title = Text('x')`: a name followed by `=` (not `==` / `=>`), after `(` or `,` or at the start of a continuation line.",
+      "patterns": [
+        {
+          "match": "(?<=[(,])\\s*([a-z_]\\w*)\\s*(=)(?![=>])",
+          "captures": {
+            "1": {
+              "name": "comment.example.variable.parameter.named.nuclear"
+            },
+            "2": {
+              "name": "comment.example.keyword.operator.assignment.nuclear"
+            }
+          }
+        }
+      ]
+    },
+    "param": {
+      "comment": "Typed parameter `name: Type` / `name?: Type` inside parentheses.",
+      "match": "(?<=[(,{])\\s*([a-z_]\\w*)(\\??)\\s*(:)",
+      "captures": {
+        "1": {
+          "name": "comment.example.variable.parameter.nuclear"
+        },
+        "2": {
+          "name": "comment.example.keyword.operator.optional.nuclear"
+        },
+        "3": {
+          "name": "comment.example.punctuation.separator.type.nuclear"
+        }
+      }
+    },
+    "property": {
+      "patterns": [
+        {
+          "match": "(\\??\\.)\\s*([A-Z]\\w*)\\b",
+          "captures": {
+            "1": {
+              "name": "comment.example.punctuation.accessor.nuclear"
+            },
+            "2": {
+              "name": "comment.example.support.class.nuclear"
+            }
+          }
+        },
+        {
+          "match": "(\\??\\.)(?!\\.)\\s*([a-z_]\\w*)\\b",
+          "captures": {
+            "1": {
+              "name": "comment.example.punctuation.accessor.nuclear"
+            },
+            "2": {
+              "name": "comment.example.variable.other.property.nuclear"
+            }
+          }
+        },
+        {
+          "match": "(\\$)([A-Za-z_]\\w*)",
+          "captures": {
+            "1": {
+              "name": "comment.example.punctuation.definition.variable.nuclear"
+            },
+            "2": {
+              "name": "comment.example.variable.other.property.nuclear"
+            }
+          }
+        },
+        {
+          "comment": "Object key `{ name: value }`.",
+          "match": "(?<=[{,])\\s*([a-z_]\\w*)\\s*(:)(?=\\s*[^\\s])",
+          "captures": {
+            "1": {
+              "name": "comment.example.meta.object-literal.key.nuclear"
+            },
+            "2": {
+              "name": "comment.example.punctuation.separator.key-value.nuclear"
+            }
+          }
+        }
+      ]
+    },
+    "type": {
+      "patterns": [
+        {
+          "match": "\\b(string|int|double|bool|void|dynamic|num|float|number|any|object|never)\\b(?!\\s*[=(])",
+          "name": "comment.example.support.type.primitive.nuclear"
+        },
+        {
+          "match": "\\b[A-Z]\\w*\\b",
+          "name": "comment.example.support.class.nuclear"
+        }
+      ]
+    },
+    "operator": {
+      "patterns": [
+        {
+          "match": "=>|->",
+          "name": "comment.example.keyword.operator.arrow.nuclear"
+        },
+        {
+          "match": "\\.\\.\\.",
+          "name": "comment.example.keyword.operator.spread.nuclear"
+        },
+        {
+          "match": "\\.\\.(?!\\.)",
+          "name": "comment.example.keyword.operator.range.nuclear"
+        },
+        {
+          "match": "\\*\\*=|>>>=|~/=|<<=|>>=|\\?\\?=|&=|\\^=|\\|=|%=|\\+=|-=|\\*=|/=",
+          "name": "comment.example.keyword.operator.assignment.compound.nuclear"
+        },
+        {
+          "match": "\\*\\*|~/|>>>|<<|>>",
+          "name": "comment.example.keyword.operator.nuclear"
+        },
+        {
+          "match": "\\?\\?|\\?\\.",
+          "name": "comment.example.keyword.operator.null.nuclear"
+        },
+        {
+          "match": "==|!=|<=|>=",
+          "name": "comment.example.keyword.operator.comparison.nuclear"
+        },
+        {
+          "match": "(?<=[\\w)\\]])!",
+          "name": "comment.example.keyword.operator.non-null.nuclear"
+        },
+        {
+          "match": "&&|\\|\\||===|!==|;|!",
+          "name": "comment.example.invalid.illegal.foreign-syntax.nuclear"
+        },
+        {
+          "match": "=",
+          "name": "comment.example.keyword.operator.assignment.nuclear"
+        },
+        {
+          "match": "[+\\-*/%<>|?&^~]",
+          "name": "comment.example.keyword.operator.nuclear"
+        }
+      ]
+    },
+    "punctuation": {
+      "patterns": [
+        {
+          "match": ",",
+          "name": "comment.example.punctuation.separator.comma.nuclear"
+        },
+        {
+          "match": ":",
+          "name": "comment.example.punctuation.separator.colon.nuclear"
+        },
+        {
+          "match": "\\.",
+          "name": "comment.example.punctuation.accessor.nuclear"
+        },
+        {
+          "match": "[()\\[\\]{}]",
+          "name": "comment.example.meta.brace.nuclear"
+        }
+      ]
+    },
+    "identifier": {
+      "match": "\\b[a-z_]\\w*\\b",
+      "name": "comment.example.variable.other.readwrite.nuclear"
+    },
+    "cascade": {
+      "comment": "Cascade line: `..color = x`, `..write('a')`.",
+      "patterns": [
+        {
+          "match": "^\\s*(\\.\\.)([a-z_]\\w*)(?=\\s*(?:<[^<>()]*>)?\\()",
+          "captures": {
+            "1": {
+              "name": "comment.example.keyword.operator.cascade.nuclear"
+            },
+            "2": {
+              "name": "comment.example.entity.name.function.member.nuclear"
+            }
+          }
+        },
+        {
+          "match": "^\\s*(\\.\\.)([a-z_]\\w*)",
+          "captures": {
+            "1": {
+              "name": "comment.example.keyword.operator.cascade.nuclear"
+            },
+            "2": {
+              "name": "comment.example.variable.other.property.nuclear"
+            }
+          }
+        }
+      ]
+    },
+    "doc-tag": {
+      "comment": "Tags of a doc comment (base §2.3): `@param name`, `@return`, `@example`... at the start of a comment line.",
+      "patterns": [
+        {
+          "comment": "`@example` on its own comment line: the more indented lines below it are Nuclear code, written with the copy of this grammar whose scopes all start with `comment.example.` (theme/build.mjs): any theme shows it as comment, Chernobyl dims its colors.",
+          "begin": "^([ \\t]*\\*?)([ \\t]*)(@example)\\b(.*)$",
+          "beginCaptures": {
+            "1": {
+              "name": "comment.example.punctuation.definition.comment.nuclear"
+            },
+            "3": {
+              "name": "comment.example.storage.type.class.jsdoc.nuclear"
+            }
+          },
+          "end": "^(?!\\1\\2[ \\t]+\\S)",
+          "contentName": "comment.example.comment.example.nuclear",
+          "patterns": [
+            {
+              "match": "^[ \\t]*\\*(?= |$)",
+              "name": "comment.example.punctuation.definition.comment.nuclear"
+            },
+            {
+              "include": "source.nuclear.example"
+            }
+          ]
+        },
+        {
+          "match": "(?:^[ \\t]*(?:\\*[ \\t]+)?|(?<=//)[ \\t]*)(@param)\\b(?:[ \\t]+([A-Za-z_][A-Za-z0-9_]*))?",
+          "captures": {
+            "1": {
+              "name": "comment.example.storage.type.class.jsdoc.nuclear"
+            },
+            "2": {
+              "name": "comment.example.variable.other.jsdoc.nuclear"
+            }
+          }
+        },
+        {
+          "match": "(?:^[ \\t]*(?:\\*[ \\t]+)?|(?<=//)[ \\t]*)(@(?:param|return|returns|throws|throw|example|see|deprecated|since|[a-z][A-Za-z]*))\\b",
+          "captures": {
+            "1": {
+              "name": "comment.example.storage.type.class.jsdoc.nuclear"
+            }
+          }
+        },
+        {
+          "match": "^[ \\t]*(\\*)(?= |$)",
+          "captures": {
+            "1": {
+              "name": "comment.example.punctuation.definition.comment.nuclear"
+            }
+          }
+        }
+      ]
+    }
+  }
+}

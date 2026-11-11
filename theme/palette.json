@@ -1,0 +1,201 @@
+{
+  "variants": [
+    {
+      "name": "Chernobyl",
+      "slug": "chernobyl",
+      "file": "Chernobyl",
+      "description": "Dark \u00b7 radioactive \u00b7 industrial. High contrast, nuclear, clean, readable.",
+      "base": {
+        "background": "#0B0F0B",
+        "backgroundDeep": "#080B08",
+        "surface": "#1A1F1A",
+        "surfaceLow": "#111611",
+        "border": "#2A332A",
+        "foreground": "#D9E4D2",
+        "muted": "#8A9A8A",
+        "faint": "#4F5C4F",
+        "primary": "#A7FF00",
+        "accent": "#64FF00",
+        "warning": "#FFD600",
+        "error": "#FF4B4B",
+        "info": "#2FE0F0"
+      }
+    },
+    {
+      "name": "Chernobyl Soft",
+      "slug": "chernobyl-soft",
+      "file": "ChernobylSoft",
+      "description": "Chernobyl with a lighter slate background, burnt-yellow interface accents and One Dark\u2013style code colors.",
+      "base": {
+        "background": "#151D1A",
+        "backgroundDeep": "#111815",
+        "surface": "#202A26",
+        "surfaceLow": "#19221E",
+        "border": "#2D3934",
+        "foreground": "#ECECEC",
+        "muted": "#8F9D94",
+        "faint": "#56645C",
+        "primary": "#E0A526",
+        "accent": "#C98A12",
+        "warning": "#FFD600",
+        "error": "#FF5B4B",
+        "info": "#2FE0F0",
+        "listError": "#F2A0A0"
+      },
+      "syntax": {
+        "comment": {
+          "color": "#9AA4B8"
+        },
+        "keyword": {
+          "color": "#FFAA00"
+        },
+        "kind": {
+          "color": "#FFAA00"
+        },
+        "modifier": {
+          "color": "#FFAA00"
+        },
+        "selfKeyword": {
+          "color": "#FFAA00"
+        },
+        "throw": {
+          "color": "#FFAA00"
+        },
+        "nullValue": {
+          "color": "#F4FF7A"
+        },
+        "boolean": {
+          "color": "#F4FF7A"
+        },
+        "string": {
+          "color": "#B7F55A"
+        },
+        "stringEscape": {
+          "color": "#FF9F5A"
+        },
+        "interpolation": {
+          "color": "#ECECEC"
+        },
+        "number": {
+          "color": "#FF9F5A"
+        },
+        "function": {
+          "color": "#4DFFB4"
+        },
+        "libraryFunction": {
+          "color": "#00E5FF"
+        },
+        "type": {
+          "color": "#C39BFF"
+        },
+        "typeParameter": {
+          "color": "#C39BFF"
+        },
+        "enumMember": {
+          "color": "#F4FF7A"
+        },
+        "property": {
+          "color": "#FF6AC1"
+        },
+        "parameter": {
+          "color": "#FF6AC1"
+        },
+        "variable": {
+          "color": "#FF6AC1"
+        },
+        "decorator": {
+          "color": "#00E5FF"
+        },
+        "operator": {
+          "color": "#00E5FF"
+        },
+        "punctuation": {
+          "color": "#ECECEC"
+        },
+        "invalid": {
+          "color": "#FF5B4B",
+          "underline": true
+        }
+      }
+    }
+  ],
+  "syntax": {
+    "comment": {
+      "color": "#5F6E5F",
+      "italic": true
+    },
+    "keyword": {
+      "color": "#A7FF00"
+    },
+    "kind": {
+      "color": "#A7FF00",
+      "bold": true
+    },
+    "modifier": {
+      "color": "#A7FF00",
+      "italic": true
+    },
+    "selfKeyword": {
+      "color": "#A7FF00",
+      "italic": true
+    },
+    "throw": {
+      "color": "#FF4B4B"
+    },
+    "nullValue": {
+      "color": "#FF6B5B"
+    },
+    "boolean": {
+      "color": "#FFB347"
+    },
+    "string": {
+      "color": "#FFD600"
+    },
+    "stringEscape": {
+      "color": "#FF9A3C"
+    },
+    "interpolation": {
+      "color": "#A7FF00"
+    },
+    "number": {
+      "color": "#FFB347"
+    },
+    "function": {
+      "color": "#2FE0F0"
+    },
+    "type": {
+      "color": "#64FF00"
+    },
+    "typeParameter": {
+      "color": "#64FF00",
+      "italic": true
+    },
+    "enumMember": {
+      "color": "#9CF0C8"
+    },
+    "property": {
+      "color": "#FF8A3D"
+    },
+    "parameter": {
+      "color": "#D9E4D2",
+      "italic": true
+    },
+    "variable": {
+      "color": "#D9E4D2"
+    },
+    "decorator": {
+      "color": "#D7E86A",
+      "italic": true
+    },
+    "operator": {
+      "color": "#8FD400"
+    },
+    "punctuation": {
+      "color": "#8A9A8A"
+    },
+    "invalid": {
+      "color": "#FF4B4B",
+      "underline": true
+    }
+  }
+}

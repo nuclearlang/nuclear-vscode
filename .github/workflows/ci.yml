@@ -1,0 +1,45 @@
+# The VS Code extension: compiled and packaged with the language server and every dialect.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: nuclearlang/nuclear
+          path: nuclear
+      - uses: actions/checkout@v4
+        with:
+          path: nuclear/nuclear-vscode
+      - name: The other repositories of the working tree
+        run: |
+          git clone --depth 1 https://github.com/nuclearlang/dragonfly-mobile nuclear/dragonfly-mobile
+          git clone --depth 1 https://github.com/nuclearlang/dragonfly-backend nuclear/dragonfly-backend
+          git clone --depth 1 https://github.com/nuclearlang/dragonfly-web nuclear/dragonfly-web
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: "Compile, the generated themes and icons, the package"
+        working-directory: nuclear/nuclear-vscode
+        run: |
+          npm ci --no-audit --no-fund
+          npm run compile
+          npm run theme
+          npm run package
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vsix
+          path: nuclear/nuclear-vscode/*.vsix
