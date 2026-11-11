@@ -32,7 +32,7 @@ jobs:
           components: clippy
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 26
       - name: "Compile, the generated themes and icons, the package"
         working-directory: nuclear/nuclear-vscode
         run: |
