@@ -160,6 +160,53 @@ add its folder in the `nuclear.dialectPaths` setting; the `<workspace>/dialects`
   there): one reload, then the action continues. The tools at the bottom
   (`Ctrl+Alt+<letter>`). Clicking a tab or an action shows the shortcut that does the same. A welcome page
   (`Ctrl+Alt+W`, and at startup when no editor is open) lists the projects, the tools and the keys.
+- **Loop** (`Ctrl+Alt+P`): spec-driven work as a pipeline. The first page is the spec: what you want (a feature, a
+  refactor, a bug, tests, a security review, documentation, a diagram), written here or imported from Jira or a GitHub
+  issue, its acceptance criteria, the context files the agents get (suggested from the project and your skills) and
+  who leads (Claude with the local Nuclear Developer, or the local agents only). A run is drawn like a GitHub pipeline
+  that zooms like a C4 diagram: the stages (spec, generate, plan, code, tests, security, artifacts, deploy; *Generate* runs `dragonfly gen` for the
+  resources the spec names, so the agents write only what is left), then the steps of a
+  stage, then what each agent did (its trace, its code, its output). The commands of each stage are
+  `.nuclear/loop.json`; *Export CI* writes them for GitHub Actions, GitLab CI or Bitbucket Pipelines. Needs the
+  [Nuclear Smart Graph](https://github.com/nuclearlang/nuclear-graph) and the
+  [Nuclear Developer](https://github.com/nuclearlang/nuclear-developer) running. The same engine runs without the
+  editor as `nuclear-loop` (`run` a spec file, `ci` the server stages, `export`, `runs`), installed by `./install.sh`.
+- **Nuclear agent** (`Ctrl+Alt+A`): a chat with the local agents of the
+  [Nuclear Developer](https://github.com/nuclearlang/nuclear-developer), like the chats of Claude or Cursor, over the
+  active project and on your machine. Ask anything about the project: the local assistant answers from the project's
+  map (`.nuclear/map.md`) and the Smart Graph. Give an order with `/task <what to do>`: the local agents plan it, write
+  the tests first, then the code, run the tests and the security review, and their journal is the answer (*Open the
+  journal of the run*). The templates above the input are built from the project's own components and use cases;
+  every session is kept in the project (`.nuclear/chat/<id>.json`) and listed on the left.
+- **Settings and integrations** (`Ctrl+Alt+S`): every setting of the AI loop in one page, kept as the editor's
+  `nuclear.ai.*` settings: the services (Smart Graph, Nuclear Developer, Ollama) with their state and *Start* /
+  *Restart* with the chosen models; the local models (installed ones with their size, a warning over the 3B rule,
+  *Pull*); the Nuclear MCP server added to Claude Code, Codex or Cursor in one click; the connections (the graph's
+  clients and pending access requests with *Allow* / *Deny* / *Revoke*, Jira, GitHub); Claude's model and the retry
+  policy. A project's `.nuclear/loop.json` still wins for its own pipeline.
+- **Work that does not stop, and notifications**: a Loop run or a chat question belongs to the extension, not to its
+  page: switch tools or close the page and it keeps working. When it ends (a chat answered, a run passed or failed) a
+  notification says so (*Open* goes to that run or session) unless you are looking at it; the Nuclear icon of the
+  activity bar shows a badge with the unread ones, each tool's tab its count, and the tool's pane lists them.
+- **The chat in detail**: what the agent did is folded in grey under each answer (its steps, how long, how many tokens
+  it read); a context meter shows how full the local model's window is (`nuclear.ai.contextTokens`) and tells you to
+  start a new session when it is near; ↑ / ↓ in the input go through the questions you asked before; a question that
+  failed has *↻ Retry*, an order that failed *↻ Retry from the step that failed*.
+- **A run survives the editor**: every run writes a trace log (`.nuclear/loop/runs/<id>.log`), a heartbeat and a ledger
+  of the files it writes. Close or crash VS Code in the middle of a run and, when it opens again, the run is found
+  interrupted: what its unfinished step wrote is undone and it goes on from that step by itself (a notification says
+  so; `nuclear.ai.resumeInterrupted`). A call nothing is working on (the Developer silent, Ollama holding no model) is
+  cut and retried; a command that hangs is killed; two windows never run the same run.
+- **Every connection is checked**: each run starts with *Check the connections* (the Developer, the Smart Graph,
+  Ollama and the models it needs, Claude Code when it leads, free disk), each chat question checks what it needs, and
+  every few minutes every integration is checked again (Claude Code, Codex, OpenCode, GitHub, Jira): a notification when
+  one stops answering. Every integration is configured in *Settings and integrations* with its default.
+- **When a run fails**: a call to the local agents that fails for a passing reason (the service starting, busy, a
+  5xx) is retried by itself with exponential backoff and jitter (*Settings*: tries, first wait, longest wait); each
+  retry is written in the step's trace. When a stage fails, the local **diagnoser** tells why (the kind of failure by
+  rules, the evidence from the compiler or `dragonfly doctor`, the next step), shown on the run and in the chat;
+  *↻ Retry* goes on from the step that failed (on the run and on the failed step itself), keeping every step that
+  passed; *Restart <stage>* runs the whole stage again (`nuclear-loop retry <run> [--from <stage>]` without the editor).
 - **Nuclear HTTP** (`Ctrl+Alt+H`): a workspace like Bruno. Its pane is the endpoints tree of every project by platform,
   project and component (from the contract the compiler writes, `.nuclear/contract.json`), the contracts an app
   declares with *↓ Update* (`nuclear contracts update`), OpenAPI documents of APIs that are not Nuclear, and the

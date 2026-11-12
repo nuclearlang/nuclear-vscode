@@ -2,7 +2,7 @@
   "name": "nuclearlang",
   "displayName": "NuclearLang",
   "description": "NuclearLang (.nuc) support: the Nuclear workspace (projects as tabs, tools full screen, keyboard first), language server, semantic highlighting, code metrics, the Dragonfly dialects (flutter, fastapi, nestjs, react) and the Chernobyl theme",
-  "version": "0.37.2",
+  "version": "0.44.0",
   "publisher": "nuclearlang",
   "license": "Apache-2.0",
   "icon": "icons/icon.png",
@@ -165,6 +165,172 @@
             "type": "boolean",
             "default": true,
             "markdownDescription": "Saving a `.nuc` of a backend or web project runs `dragonfly build`: the running server or page reloads by itself (uvicorn `--reload`, `node --watch`, Vite). Mobile projects hot reload on save through the Flutter session."
+          },
+          "nuclear.ai.developerUrl": {
+            "type": "string",
+            "default": "http://127.0.0.1:7879",
+            "description": "Where the Nuclear Developer (the local agents) answers."
+          },
+          "nuclear.ai.graphUrl": {
+            "type": "string",
+            "default": "http://127.0.0.1:7878",
+            "description": "Where the Nuclear Smart Graph answers."
+          },
+          "nuclear.ai.ollamaUrl": {
+            "type": "string",
+            "default": "http://localhost:11434",
+            "description": "Where Ollama runs the local models."
+          },
+          "nuclear.ai.models.coder": {
+            "type": "string",
+            "default": "qwen2.5-coder:3b",
+            "description": "The local model that writes and repairs code and tests (at most 3B parameters). Applies when the Developer is started from Settings and integrations."
+          },
+          "nuclear.ai.models.assistant": {
+            "type": "string",
+            "default": "gemma4:e2b",
+            "description": "The local model that plans, reviews, documents, diagnoses and chats (at most 3B effective parameters)."
+          },
+          "nuclear.ai.models.embeddings": {
+            "type": "string",
+            "default": "embeddinggemma",
+            "description": "The embeddings model of the Smart Graph's search (re-ingest after changing it)."
+          },
+          "nuclear.ai.claudeModel": {
+            "type": "string",
+            "enum": [
+              "sonnet",
+              "opus",
+              "haiku"
+            ],
+            "default": "sonnet",
+            "description": "Claude's model when Claude leads a Loop run."
+          },
+          "nuclear.ai.mcpCommand": {
+            "type": "string",
+            "default": "nuclear-graph",
+            "description": "The program that serves the Nuclear MCP server (`<command> mcp`) and the graph."
+          },
+          "nuclear.ai.retry.attempts": {
+            "type": "number",
+            "default": 5,
+            "minimum": 1,
+            "maximum": 10,
+            "description": "Tries of a call to the local agents that fails for a passing reason (down, busy, 5xx), the first included."
+          },
+          "nuclear.ai.retry.baseMs": {
+            "type": "number",
+            "default": 1000,
+            "minimum": 100,
+            "description": "The ceiling of the first wait before a retry, in milliseconds; it doubles at each retry (exponential backoff with full jitter)."
+          },
+          "nuclear.ai.retry.maxMs": {
+            "type": "number",
+            "default": 30000,
+            "minimum": 1000,
+            "description": "The longest wait before a retry, in milliseconds."
+          },
+          "nuclear.ai.contextTokens": {
+            "type": "number",
+            "default": 8192,
+            "minimum": 2048,
+            "description": "The context window of the local models, in tokens: what the chat's meter measures against. The Nuclear Developer runs its models with 8192 (config/project_config.nuc numCtx)."
+          },
+          "nuclear.ai.claude.command": {
+            "type": "string",
+            "default": "claude",
+            "description": "Claude Code's command: the Loop's lead when Claude leads, checked before every such run."
+          },
+          "nuclear.ai.claude.maxBudgetUsd": {
+            "type": "number",
+            "default": 2,
+            "minimum": 0,
+            "description": "The most a Loop run led by Claude may spend, in USD (0: no limit)."
+          },
+          "nuclear.ai.codex.enabled": {
+            "type": "boolean",
+            "default": false,
+            "description": "Use Codex (its MCP server entry and its regular check)."
+          },
+          "nuclear.ai.codex.command": {
+            "type": "string",
+            "default": "codex",
+            "description": "Codex's command."
+          },
+          "nuclear.ai.opencode.enabled": {
+            "type": "boolean",
+            "default": false,
+            "description": "Use OpenCode (its MCP server entry and its regular check)."
+          },
+          "nuclear.ai.opencode.command": {
+            "type": "string",
+            "default": "opencode",
+            "description": "OpenCode's command."
+          },
+          "nuclear.ai.opencode.configFile": {
+            "type": "string",
+            "default": "~/.config/opencode/opencode.json",
+            "description": "OpenCode's configuration file, where the Nuclear MCP server is added."
+          },
+          "nuclear.ai.cursor.mcpFile": {
+            "type": "string",
+            "default": "~/.cursor/mcp.json",
+            "description": "Cursor's MCP configuration file, where the Nuclear MCP server is added."
+          },
+          "nuclear.ai.github.command": {
+            "type": "string",
+            "default": "gh",
+            "description": "GitHub's command line (issues imported as Loop specs), checked with `gh auth status`."
+          },
+          "nuclear.ai.jira.site": {
+            "type": "string",
+            "default": "",
+            "description": "Your Jira site (https://your-team.atlassian.net): issues imported as Loop specs. The API token is kept in the secret storage."
+          },
+          "nuclear.ai.jira.email": {
+            "type": "string",
+            "default": "",
+            "description": "The email of your Atlassian account (Jira)."
+          },
+          "nuclear.ai.jira.criteriaField": {
+            "type": "string",
+            "default": "",
+            "description": "Optional: the Jira field that holds the acceptance criteria (customfield_10050); empty: read them from the description."
+          },
+          "nuclear.ai.watch.callTimeoutMinutes": {
+            "type": "number",
+            "default": 15,
+            "minimum": 1,
+            "description": "A call to the local agents that takes longer is cut and retried."
+          },
+          "nuclear.ai.watch.stallSeconds": {
+            "type": "number",
+            "default": 90,
+            "minimum": 10,
+            "description": "A call is stalled (cut and retried) when, this long, the Developer does not answer or Ollama holds no model."
+          },
+          "nuclear.ai.watch.minFreeMb": {
+            "type": "number",
+            "default": 500,
+            "minimum": 50,
+            "description": "Free disk space (the project and the temporary folder) a Loop run needs before it starts."
+          },
+          "nuclear.ai.resumeInterrupted": {
+            "type": "boolean",
+            "default": true,
+            "description": "A Loop run the editor left half done (closed or crashed) is recovered and goes on from the step where it stopped."
+          },
+          "nuclear.ai.checkEveryMinutes": {
+            "type": "number",
+            "default": 5,
+            "minimum": 0,
+            "description": "How often every connection (the Developer, the Smart Graph, Ollama and its models, Claude, Codex, OpenCode, GitHub, Jira) is checked; a notification says when one stops answering (0: only before each task)."
+          },
+          "nuclear.ai.watch.commandTimeoutMinutes": {
+            "type": "number",
+            "default": 20,
+            "minimum": 1,
+            "description": "A command of the Loop (a build, the tests) that runs longer is killed with its children and the step fails."
           }
         }
       },
@@ -1141,6 +1307,11 @@
       },
       {
         "command": "nuclear.workspace.tool",
+        "args": "loop",
+        "key": "ctrl+alt+p"
+      },
+      {
+        "command": "nuclear.workspace.tool",
         "args": "designer",
         "key": "ctrl+alt+d"
       },
@@ -1321,11 +1492,13 @@
     }
   },
   "scripts": {
-    "compile": "tsc -p . --noEmit && esbuild src/extension.ts --bundle --outfile=out/extension.js --external:vscode --format=cjs --platform=node --target=node18 --sourcemap",
+    "compile": "tsc -p . --noEmit && esbuild src/extension.ts --bundle --outfile=out/extension.js --external:vscode --format=cjs --platform=node --target=node18 --sourcemap && npm run loop",
+    "loop": "esbuild src/loopCli.ts --bundle --outfile=out/nuclear-loop.js --format=cjs --platform=node --target=node18",
     "watch": "esbuild src/extension.ts --bundle --outfile=out/extension.js --external:vscode --format=cjs --platform=node --target=node18 --sourcemap --watch",
     "theme": "node theme/build.mjs && node theme/icons.mjs",
     "server": "node scripts/bundle-server.mjs",
-    "package": "npm run theme && npm run compile && npm run server && vsce package --no-dependencies --allow-missing-repository"
+    "package": "npm run theme && npm run compile && npm run server && vsce package --no-dependencies --allow-missing-repository",
+    "test": "esbuild test/loop.test.ts --bundle --platform=node --target=node18 --external:vscode --outfile=out/test/loop.test.js && node --test out/test/loop.test.js"
   },
   "dependencies": {
     "vscode-languageclient": "9.0.1"

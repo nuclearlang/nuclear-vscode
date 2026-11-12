@@ -1,5 +1,6 @@
 // VS Code client for the NuclearLang language server (nuclear-lsp).
 
+import { SettingsPanel } from './settingsPanel';
 import { execFile } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -387,6 +388,7 @@ function watchAppCreation(context: vscode.ExtensionContext): void {
 }
 
 export async function deactivate(): Promise<void> {
+  SettingsPanel.stopServices();
   await stopClient();
 }
 

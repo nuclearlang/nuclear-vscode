@@ -11,6 +11,11 @@ import * as path from 'node:path';
 import * as vscode from 'vscode';
 import { isInstalled } from './card';
 import { devices, devicesChanged, PRESETS, revealDevice } from './device';
+import { ChatPanel } from './chatPanel';
+import { Notice, notices } from './notifications';
+import { SettingsPanel } from './settingsPanel';
+import { watchConnections } from './connections';
+import { LoopPanel, resumeOrphans } from './loopPanel';
 import { findProjects, HttpModel, NodeAction, Project, readProject } from './http';
 import { ComponentPanel } from './httpPanel';
 
@@ -43,6 +48,14 @@ export const TOOLS: Tool[] = [
     planned: [],
   },
   {
+    id: 'loop',
+    label: 'Loop',
+    short: 'LOOP',
+    key: 'Ctrl+Alt+P',
+    about: 'Spec-driven work as a pipeline (ADR-0102): a spec written here or imported from Jira or GitHub goes through plan, code, tests, security, artifacts and deploy; Claude plans, the local developer writes, every step shows who did what.',
+    planned: [],
+  },
+  {
     id: 'designer',
     label: 'UI designer',
     short: 'UI',
@@ -63,16 +76,16 @@ export const TOOLS: Tool[] = [
     label: 'Nuclear agent',
     short: 'AI',
     key: 'Ctrl+Alt+A',
-    about: 'A local agent that knows the skill, the specs and the active project, to write and fix Nuclear code.',
-    planned: ['chat over the active project with the `nuclear` skill loaded', 'apply a change as a diff of `.nuc` files', 'run `nuclear check` and `dragonfly test` and read the result'],
+    about: 'A chat with the local agents (Nuclear Developer) over the active project: questions answered from its map and the Smart Graph, orders with /task run by the local agents, templates from the project, sessions kept in .nuclear/chat.',
+    planned: [],
   },
   {
     id: 'settings',
     label: 'Settings and integrations',
     short: '⚙',
     key: 'Ctrl+Alt+S',
-    about: 'Where every integration is configured: AI providers, devices, backends, the language server.',
-    planned: ['providers and keys for the agent and the documenter', 'the Dragonfly device and the emulators', 'the extension settings in one form'],
+    about: 'Every setting of the AI loop in one page: the services and their state, the local models (3B rule), the MCP server in Claude Code, Codex and Cursor, the connections (graph clients, Jira, GitHub), retries.',
+    planned: [],
   },
 ];
 
@@ -143,6 +156,13 @@ const DIALECT_ICONS: Record<string, string> = { flutter: 'flutter', react: 'reac
 
 export function activateWorkspace(context: vscode.ExtensionContext, http: HttpModel): Workspace {
   const ws = new Workspace(context, http);
+  // the notifications of the local agents: a count on each tool's tab, a badge on the strip's icon, Open goes to it
+  notices.open = (n) => ws.openNotice(n);
+  context.subscriptions.push(notices.onDidChange.event(() => ws.refresh()));
+  // runs a closed or crashed editor left half done: recovered and resumed where they stopped
+  setTimeout(() => resumeOrphans(ws.projects().map((p) => p.root)), 3000);
+  // every external connection, checked now and regularly: a notification when one stops answering
+  watchConnections(context);
   http.extraRoots = () => ws.saved();
   http.refresh();
   ws.refresh();
@@ -282,6 +302,9 @@ class Workspace implements vscode.WebviewViewProvider {
     if (tool) {
       if (tool.id === 'http') ComponentPanel.restore(this.context, this.http, this.http.reopen);
       else if (tool.id === 'devices') await vscode.commands.executeCommand('nuclear.unparkDevices');
+      else if (tool.id === 'loop') LoopPanel.show(this.context, () => this.projects(), this.context.workspaceState.get<string>(LAST_PROJECT));
+      else if (tool.id === 'settings') SettingsPanel.show(this.context);
+      else if (tool.id === 'agent') ChatPanel.show(this.context, () => this.projects(), this.context.workspaceState.get<string>(LAST_PROJECT));
       else if (tool.planned.length) ToolPanel.show(this.context, tool);
       return true;
     }
@@ -332,6 +355,14 @@ class Workspace implements vscode.WebviewViewProvider {
     if (this.activeKey() === root) await this.context.workspaceState.update(ACTIVE, undefined);
     this.http.refresh();
     this.refresh();
+  }
+
+  /** *Open* on a notification: its tool, on the run or the chat session it is about. */
+  async openNotice(n: Notice): Promise<void> {
+    await this.go(TOOL_PREFIX + n.tool);
+    if (n.tool === 'loop') LoopPanel.show(this.context, () => this.projects(), n.root, n.ref);
+    else if (n.tool === 'settings') SettingsPanel.show(this.context);
+    else ChatPanel.show(this.context, () => this.projects(), n.root, n.ref);
   }
 
   async openTool(id?: string): Promise<void> {
@@ -447,6 +478,8 @@ class Workspace implements vscode.WebviewViewProvider {
     // the editor title bar shows the actions of this platform (package.json `editor/title`, `when: nuclear.platform == ...`)
     void vscode.commands.executeCommand('setContext', 'nuclear.platform', active?.platform ?? '');
     if (!this.view) return;
+    const unread = notices.unread();
+    this.view.badge = unread ? { value: unread, tooltip: `${unread} notification${unread === 1 ? '' : 's'} of the local agents` } : undefined;
     const webview = this.view.webview;
     this.watchFiles(active?.root);
     const tool = TOOLS.find((t) => TOOL_PREFIX + t.id === key);
@@ -457,7 +490,7 @@ class Workspace implements vscode.WebviewViewProvider {
         ? { kind: 'tree', nodes: this.http.tree(), environment: envs.active }
         : tool.id === 'devices'
           ? { kind: 'devices', devices: devices(), project: this.active()?.name }
-          : { kind: 'template', tool: { id: tool.id, label: tool.label, about: tool.about, key: tool.key } };
+          : { kind: 'template', tool: { id: tool.id, label: tool.label, about: tool.about, key: tool.key }, notices: tool.id === 'agent' || tool.id === 'loop' || tool.id === 'settings' ? notices.all().filter((n) => n.tool === tool.id).map((n) => ({ id: n.id, title: n.title, text: n.text, level: n.level, at: n.at, read: n.read })) : [] };
     void webview.postMessage({
       type: 'state',
       projects: this.projects().map((p) => ({
@@ -470,7 +503,7 @@ class Workspace implements vscode.WebviewViewProvider {
         dialectIcon: DIALECT_ICONS[p.dialect] ? this.icons.uri(webview, 'icon-themes', 'atom', 'files', `${DIALECT_ICONS[p.dialect]}.svg`) : undefined,
       })),
       active: key,
-      tools: TOOLS.map((t) => ({ id: t.id, label: t.label, short: t.short, key: t.key })),
+      tools: TOOLS.map((t) => ({ id: t.id, label: t.label, short: t.short, key: t.key, unread: t.id === 'agent' || t.id === 'loop' || t.id === 'settings' ? notices.unread(t.id) : 0 })),
       pane,
     });
   }
@@ -493,7 +526,7 @@ class Workspace implements vscode.WebviewViewProvider {
       this.view = undefined;
       this.watchFiles(undefined);
     });
-    view.webview.onDidReceiveMessage((m: { type: string; dir?: string; path?: string; root?: string; id?: string; endpoint?: unknown; action?: NodeAction; preset?: string }) => {
+    view.webview.onDidReceiveMessage((m: { type: string; dir?: string; path?: string; root?: string; id?: string; endpoint?: unknown; action?: NodeAction; preset?: string; notice?: number }) => {
       switch (m.type) {
         case 'list':
           if (m.dir) void view.webview.postMessage({ type: 'entries', dir: m.dir, entries: this.icons.entriesOf(view.webview, m.dir) });
@@ -513,6 +546,11 @@ class Workspace implements vscode.WebviewViewProvider {
         case 'tool':
           if (m.id) void this.openTool(m.id);
           break;
+        case 'notice': {
+          const n = notices.all().find((x) => x.id === m.notice);
+          if (n) void this.openNotice(n);
+          break;
+        }
         case 'action':
           void this.action(m.id);
           break;
@@ -689,6 +727,7 @@ const GLYPHS: Record<string, string> = {
   designer: '<rect x="2" y="2" width="12" height="12" rx="1.5"/><path d="M2 6h12M6 6v8"/>',
   docs: '<path d="M4 2h6l3 3v9H4zM10 2v3h3M6 8h5M6 11h5"/>',
   agent: '<path d="M8 1.5l1.4 3.6L13 6.5l-3.6 1.4L8 11.5 6.6 7.9 3 6.5l3.6-1.4zM12.5 10.5l.6 1.4 1.4.6-1.4.6-.6 1.4-.6-1.4-1.4-.6 1.4-.6z"/>',
+  loop: '<path d="M8 2.5a5.5 5.5 0 1 0 5.3 7"/><path d="M13.5 5v3.5H10"/><circle cx="8" cy="8" r="1.4"/>',
   settings: '<circle cx="8" cy="8" r="2.2"/><path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M3.4 12.6l1.4-1.4M11.2 4.8l1.4-1.4"/>',
   info: '<circle cx="8" cy="8" r="6.5"/><path d="M8 7v4M8 5v.5"/>',
   device: '<rect x="4" y="1.5" width="8" height="13" rx="1.5"/><path d="M7 12.5h2"/>',
@@ -708,6 +747,11 @@ function stripHtml(webview: vscode.Webview): string {
   .tools { margin-top: auto; padding-bottom: 6px; flex: none; }
   .tab { position: relative; width: 32px; height: 32px; margin: 5px auto 0; border-radius: 5px; display: grid; place-items: center; font-size: 10px; font-weight: 600; cursor: pointer; opacity: .7; user-select: none; letter-spacing: .02em; }
   .tab:hover { opacity: 1; background: var(--vscode-list-hoverBackground); }
+  .section { margin: 14px 8px 4px; font-size: 11px; text-transform: uppercase; letter-spacing: .05em; opacity: .7; }
+  .notice { margin: 2px 6px; padding: 5px 8px; border-radius: 4px; cursor: pointer; border-left: 3px solid transparent; display: flex; flex-direction: column; gap: 1px; }
+  .notice:hover { background: var(--vscode-list-hoverBackground); } .notice small { opacity: .7; }
+  .notice.unread { border-left-color: var(--vscode-activityBarBadge-background); } .notice.error b { color: var(--vscode-errorForeground); }
+  .tab .badge { position: absolute; top: -3px; right: -3px; min-width: 14px; height: 14px; padding: 0 3px; box-sizing: border-box; border-radius: 7px; font-size: 9px; line-height: 14px; text-align: center; color: var(--vscode-activityBarBadge-foreground); background: var(--vscode-activityBarBadge-background); opacity: 1; }
   .tab.on { opacity: 1; background: var(--vscode-list-activeSelectionBackground); color: var(--vscode-list-activeSelectionForeground, var(--vscode-foreground)); box-shadow: inset 2px 0 0 var(--vscode-focusBorder); }
   .tab .n { position: absolute; left: 2px; top: 1px; font-size: 8px; opacity: .6; font-weight: 400; }
   .tab img.pi { width: 20px; height: 20px; }
@@ -818,6 +862,7 @@ function stripHtml(webview: vscode.Webview): string {
       const t = tab('', tool.label + '  (' + tool.key + ')', state.active === 'tool:' + tool.id);
       t.classList.add('t-' + tool.id);
       t.appendChild(glyph(tool.id));
+      if (tool.unread) { const b = document.createElement('span'); b.className = 'badge'; b.textContent = tool.unread > 9 ? '9+' : String(tool.unread); t.appendChild(b); t.title += '  · ' + tool.unread + ' new'; }
       t.addEventListener('click', () => { vscode.postMessage({ type: 'tool', id: tool.id }); toast(tool.key, 'opens the ' + tool.label.toLowerCase()); });
       ts.appendChild(t);
     }
@@ -970,6 +1015,16 @@ function stripHtml(webview: vscode.Webview): string {
     const a = el('a', '', 'Open it'); a.addEventListener('click', () => vscode.postMessage({ type: 'tool', id: p.tool.id }));
     e.appendChild(a); e.appendChild(document.createTextNode(' (' + p.tool.key + ').'));
     pane.appendChild(e);
+    if (!p.notices || !p.notices.length) return;
+    // what the local agents did while you were elsewhere: newest first, a click opens it
+    pane.appendChild(el('div', 'section', 'Notifications'));
+    for (const n of p.notices) {
+      const row = el('div', 'notice' + (n.read ? '' : ' unread') + ' ' + n.level);
+      row.appendChild(el('b', '', n.title));
+      row.appendChild(el('small', '', n.text + ' · ' + new Date(n.at).toLocaleTimeString()));
+      row.addEventListener('click', () => vscode.postMessage({ type: 'notice', notice: n.id }));
+      pane.appendChild(row);
+    }
   }
 
   window.addEventListener('message', (ev) => {

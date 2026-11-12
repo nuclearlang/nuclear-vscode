@@ -8,3 +8,5 @@ vendor/**
 docs/**
 CONTRIBUTING.md
 *.vsix
+test/**
+out/test/**

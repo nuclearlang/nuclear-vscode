@@ -138,6 +138,81 @@ actions `ctrl+alt+r/g/l/b/t/c` on `nuclear.action.*`, `serve` on `ctrl+alt+r` fo
 `Workspace.onDidChange`; opened on activation when `nuclear.workspace.welcome` and every tab group is empty;
 `onStartupFinished` activation). Not run in a VS Code window yet.
 
+## `src/settingsPanel.ts`, `src/aiSettings.ts`, `src/localModels.ts` — Settings and integrations (ADR-0102 §18)
+
+The tool `settings` (`Ctrl+Alt+S`). `aiSettings()` reads `nuclear.ai.*` (package.json `contributes.configuration`);
+`machineConfig()` is passed to `readConfig(root, platform, machine)` (defaults < settings < the project's
+`.nuclear/loop.json`); `serviceEnv()` is the environment the graph and the Developer are started with (`CODER_MODEL`,
+`ASSISTANT_MODEL`, `OLLAMA_URL`, `NUCLEAR_GRAPH_EMBED`, ports). The page: services (health urls; *Start*/*Restart*
+spawns `nuclear-graph serve` / `nuclear-developer`, owned processes stopped on deactivate), models (Ollama
+`/api/tags`, `billionsOf` with the effective size of `eNb` tags, `MAX_BILLIONS` 3.5, *Pull* as a task), MCP (`claude
+mcp get|add --scope user`, `codex mcp list|add`, `~/.cursor/mcp.json` merged), connections (`nuclear-graph
+requests|allow|deny|revoke|connect mcp`, Jira in the secret storage via `jiraAuth`, `gh auth status`), pipeline.
+
+## `src/loopSafety.ts`, `src/connections.ts` — fail-safe runs and checked connections (ADR-0102 §§21–22)
+
+`loopSafety.ts` (no VS Code import): `atomicWrite`, `trace`/`readTrace` (JSON lines), `owner`/`alive`/`orphaned`
+(`BEAT_MS` 10 s, `STALE_MS` 45 s), `rollback` of the ledger (`Run.writes`), `checkConnections` (services, models,
+tools' `--version`, `freeMb`), `ollamaBusy` (`/api/ps`). In `loopEngine.ts`: `start` refuses a run another live
+process owns, recovers an orphaned one, beats, runs `preflight` before the first stage it runs; `writeFile` keeps the
+ledger; `watched` cuts a call (`StallError`) on `callTimeoutMs` or `stallSeconds` without the Developer or a model;
+commands get `commandTimeoutMs` (`TIMED_OUT`, the process group killed); `recoverRun`/`recoverRuns`. In loopPanel.ts:
+`driveRun` (module-level), `resumeOrphans` (activation). `connections.ts`: `checkAll` (also Codex, OpenCode, GitHub,
+Jira), `checkForChat`, `watchConnections` (every `checkEveryMinutes`, a notice of kind `settings` on a change).
+
+## `src/notifications.ts` — notifications of the local agents (ADR-0102 §19)
+
+`notices` (one store): `add` (a toast with *Open* unless the tool is on screen), `watch(tool, visible)` from the panels'
+`onDidChangeViewState`, `unread(tool)`, `open` (set by the workspace: `openNotice` → the tool on the run / session).
+The workspace sets `WebviewView.badge` (the Nuclear icon in the activity bar), a count on each tool's tab and the list
+in the tool's pane. The Loop's engines (`engines` in loopPanel.ts) and the chat's jobs (`jobs` in chatPanel.ts) are
+module-level: a page is only a view, so closing it or switching tools leaves the work running.
+
+## `src/chatPanel.ts` — the Nuclear agent tool (ADR-0102 §16)
+
+The tool `agent` of the strip (`Ctrl+Alt+A`): a chat with the local agents. A message goes to `POST
+/developer/chat` (`message`, `platform`, `map` = `.nuclear/map.md` clipped to 12 000 characters, `history` = the last
+8 messages, `historyOf`); `/task <text>` builds a local-led `Spec` (`criteriaOf`) and runs a `LoopEngine` in place,
+drawing each step as it ends and answering with the run's `notes` and its journal. Sessions: `.nuclear/chat/<id>.json`
+(`listSessions`, `saveSession`; a job is `ask` or `drive`, saved by `append` even with the page closed). Each answer keeps
+`steps`, `seconds`, `tokens` (the assistant's `context` trace, `tokensOf` = characters / 4), drawn folded in grey; the
+context meter (`nuclear.ai.contextTokens`); `askedOf` for ↑ / ↓; *↻ Retry* of a failed question (`ask` message) or of a
+failed order from its failed step. Templates: `templatesOf(map, platform)` from the map's components, use cases and
+controllers/screens. The page renders the answers' markdown itself (code blocks, inline code, bold, lists).
+
+## `src/loopEngine.ts`, `src/loopPanel.ts` — the Loop tool (ADR-0102)
+
+A tool of the workspace strip (`Ctrl+Alt+P`, id `loop`), one full-screen webview like Devices and HTTP.
+`loopEngine.ts` has no VS Code import (a node script drives it; `npm test` runs `test/loop.test.ts` with node:test):
+retries (`backoff`: exponential with full jitter, capped, `Retry-After` wins; `transientStatus`; `config.retry`),
+`start(from?)` resumes a failed run from its first failed stage (earlier attempt in `run.previous`, `restoreWritten`
+reads the files back), `diagnose()` asks `/developer/diagnose` when a stage fails (`run.diagnosis`); `Spec`, `Run`, `Stage`, `Step` (each with an
+`Actor`: you, claude, planner, coder, tester, security, shell, graph), `LoopEngine.start()` runs spec → generate →
+plan → tests first → code → verify → security → artifacts → deploy (generate, ADR-0103: `specResources` — the spec's
+`## Resources` or its `GET <url>` lines — through `dragonfly gen resource ... --from-spec`, the changed files found by
+`nucFiles` snapshots and put in the write ledger, `Step.files`; the planner gets `generatedNote()` and
+`withoutGenerated` drops a piece that repeats one) and saves `.nuclear/loop/runs/<id>.json` on every step (`change` event);
+`specs/<id>/spec.md` is written by the spec stage. Agents: the Nuclear Developer over HTTP (`developerUrl`), Claude
+through `claude -p --output-format stream-json` with the Nuclear MCP (`graphCommand mcp`, `--strict-mcp-config`,
+`--tools` limited to the stage's built-ins): every tool call is a step, `developer_*` calls drawn as the local agent.
+Code stage: each piece by the coder (Claude takes the ones it leaves with errors and keeps the fix as a graph
+example), then `commands.check`; a project error gets one local repair per file (`repairProject`), then Claude.
+Commands are data: `.nuclear/loop.json` (`defaultConfig(platform)`), exported by `ciFile()` to GitHub Actions, GitLab
+CI or Bitbucket Pipelines (the deterministic stages). Sources: `jiraIssue`/`jiraMine` (REST v3, ADF to text; the
+site, email and API token in VS Code secret storage `nuclear.loop.jira`), `githubIssue` (`gh issue view`);
+`criteriaOf` reads the list under "Acceptance criteria". `suggestContext` ranks the project's and the user's `.md`
+(agent instructions first, then specs, context, ADRs, skills, agent definitions) by the words of the spec.
+`loopPanel.ts` draws it: the runs, the spec form (use case → spec written or imported → context → who leads, with an
+optional plan preview by the local planner), and a run as a C4-like pipeline: level 1 the stages, a click zooms
+(`transform-origin` at the clicked node) into a stage's steps, another into a step (trace, code, output, input);
+`Escape` zooms out.
+
+`src/loopCli.ts` is `nuclear-loop` (`npm run loop` → `out/nuclear-loop.js`, also part of `compile`; `stage.sh` puts
+it in the installation's `bin/` with a `node` wrapper): `run [spec.md] [--lead]` (`parseSpecMarkdown`, the inverse of
+`specMarkdown`; no file = the spec changed last; the project is the closest folder up with `config.nuc`), `ci
+[stage...]` (`ciCommands`, the same grouping `ciFile` exports), `export <provider>`, `runs`. The JetBrains tool window
+drives the Loop through it (no Zed: the Loop is for VS Code and Android Studio only, decided by the user).
+
 ## Other files
 
 `syntaxes/nuclear.tmLanguage.json` (TextMate grammar, also used by JetBrains and the website copy);
