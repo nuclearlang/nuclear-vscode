@@ -164,9 +164,14 @@ add its folder in the `nuclear.dialectPaths` setting; the `<workspace>/dialects`
   refactor, a bug, tests, a security review, documentation, a diagram), written here or imported from Jira or a GitHub
   issue, its acceptance criteria, the context files the agents get (suggested from the project and your skills) and
   who leads (Claude with the local Nuclear Developer, or the local agents only). A run is drawn like a GitHub pipeline
-  that zooms like a C4 diagram: the stages (spec, generate, plan, code, tests, security, artifacts, deploy; *Generate* runs `dragonfly gen` for the
-  resources the spec names, so the agents write only what is left), then the steps of a
-  stage, then what each agent did (its trace, its code, its output). The commands of each stage are
+  that zooms like a C4 diagram: the stages (spec, generate, plan, code, tests, security, artifacts, deploy; the *Specification* ends with the
+  **analysis**: which kind of request the spec is (a whole system, one screen, a rename, a failing test...: its
+  strategy, ADR-0105), which decides the stages that run, what the generators write and what is asked of you first;
+  *Generate* runs `dragonfly gen` for the
+  resources the spec names, also in plain words, so the agents write only what is left; *Plan* shows the work as parts, tasks and pieces
+  and says what of the spec is beyond the platform or the local agents; *Tests first* is skipped when the generators
+  wrote every file), then the steps of a stage, then what each agent did (its trace, its code, its output). Every
+  call to an agent carries the project's folder, so the agent reads by itself the files its task names. The commands of each stage are
   `.nuclear/loop.json`; *Export CI* writes them for GitHub Actions, GitLab CI or Bitbucket Pipelines. Needs the
   [Nuclear Smart Graph](https://github.com/nuclearlang/nuclear-graph) and the
   [Nuclear Developer](https://github.com/nuclearlang/nuclear-developer) running. The same engine runs without the
@@ -178,6 +183,16 @@ add its folder in the `nuclear.dialectPaths` setting; the `<workspace>/dialects`
   the tests first, then the code, run the tests and the security review, and their journal is the answer (*Open the
   journal of the run*). The templates above the input are built from the project's own components and use cases;
   every session is kept in the project (`.nuclear/chat/<id>.json`) and listed on the left.
+- **Set up the AI services** (*Nuclear: Set Up the AI Services*; offered once on a machine never set up; *Set-up…* in
+  *Settings and integrations*): a wizard in four steps. It reads the machine (processor, memory, GPU, free disk) and
+  asks where the agents run: on this machine, or remote agents only. It offers three sets of local models, `lite`,
+  `medium` and `hard`, each with what it downloads, the memory it wants, what works with it and what does not; the
+  one that fits the machine is suggested, the tight ones and the ones that do not fit are marked, and the choice is
+  the user's. It finds what the services need (NuclearLang, uv, Ollama) by itself once installed, or installs it in a
+  terminal. Then it installs the Smart Graph, the Nuclear Developer, the models and the knowledge base, with the
+  progress of each step and *Try again* from the one that failed, and leaves both services starting at every login.
+  The same set-up in a terminal: `nuclear-loop setup`
+  ([Set up the AI services](https://github.com/nuclearlang/nuclear/blob/main/docs/ai/setup.md)).
 - **Settings and integrations** (`Ctrl+Alt+S`): every setting of the AI loop in one page, kept as the editor's
   `nuclear.ai.*` settings: the services (Smart Graph, Nuclear Developer, Ollama) with their state and *Start* /
   *Restart* with the chosen models; the local models (installed ones with their size, a warning over the 3B rule,

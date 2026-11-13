@@ -18,6 +18,7 @@ import { watchConnections } from './connections';
 import { LoopPanel, resumeOrphans } from './loopPanel';
 import { findProjects, HttpModel, NodeAction, Project, readProject } from './http';
 import { ComponentPanel } from './httpPanel';
+import { contextFor, registerTreeCommands } from './treeMenu';
 
 interface Tool {
   id: string;
@@ -163,6 +164,7 @@ export function activateWorkspace(context: vscode.ExtensionContext, http: HttpMo
   setTimeout(() => resumeOrphans(ws.projects().map((p) => p.root)), 3000);
   // every external connection, checked now and regularly: a notification when one stops answering
   watchConnections(context);
+  registerTreeCommands(context);
   http.extraRoots = () => ws.saved();
   http.refresh();
   ws.refresh();
@@ -485,7 +487,7 @@ class Workspace implements vscode.WebviewViewProvider {
     const tool = TOOLS.find((t) => TOOL_PREFIX + t.id === key);
     const envs = this.http.environments();
     const pane = !tool
-      ? { kind: 'files', project: active && { root: active.root, name: active.name, platform: active.platform, dialect: active.dialect } }
+      ? { kind: 'files', project: active && { ctx: JSON.stringify(contextFor(active.platform, active.root, active.root, true)), root: active.root, name: active.name, platform: active.platform, dialect: active.dialect } }
       : tool.id === 'http'
         ? { kind: 'tree', nodes: this.http.tree(), environment: envs.active }
         : tool.id === 'devices'
@@ -529,7 +531,11 @@ class Workspace implements vscode.WebviewViewProvider {
     view.webview.onDidReceiveMessage((m: { type: string; dir?: string; path?: string; root?: string; id?: string; endpoint?: unknown; action?: NodeAction; preset?: string; notice?: number }) => {
       switch (m.type) {
         case 'list':
-          if (m.dir) void view.webview.postMessage({ type: 'entries', dir: m.dir, entries: this.icons.entriesOf(view.webview, m.dir) });
+          if (m.dir) {
+            const p = this.active();
+            const entries = this.icons.entriesOf(view.webview, m.dir).map((e) => ({ ...e, ctx: p && JSON.stringify(contextFor(p.platform, p.root, path.join(m.dir!, e.name), e.dir)) }));
+            void view.webview.postMessage({ type: 'entries', dir: m.dir, entries });
+          }
           break;
         case 'open':
           if (m.path) void vscode.commands.executeCommand('vscode.open', vscode.Uri.file(m.path));
@@ -896,7 +902,7 @@ function stripHtml(webview: vscode.Webview): string {
       return;
     }
     head(pane, p.project.name, (p.project.platform || '') + ' ' + p.project.dialect);
-    const tree = el('div', 'tree'); tree.id = 'tree';
+    const tree = el('div', 'tree'); tree.id = 'tree'; tree.dataset.vscodeContext = p.project.ctx;
     pane.appendChild(tree);
     renderTree();
   }
@@ -906,7 +912,7 @@ function stripHtml(webview: vscode.Webview): string {
     if (!entries) { need(dir); return; }
     for (const e of entries) {
       const full = dir.replace(/[\\\\/]$/, '') + '/' + e.name;
-      out.push({ full, name: e.name, dir: e.dir, depth, icon: e.dir && expanded.has(full) ? e.iconOpen : e.icon });
+      out.push({ full, name: e.name, dir: e.dir, ctx: e.ctx, depth, icon: e.dir && expanded.has(full) ? e.iconOpen : e.icon });
       if (e.dir && expanded.has(full)) rows(full, depth + 1, out);
     }
   }
@@ -923,6 +929,7 @@ function stripHtml(webview: vscode.Webview): string {
       if (r.icon) { const i = el('img', 'i'); i.src = r.icon; d.appendChild(i); }
       d.appendChild(el('span', 'name', r.name));
       d.title = r.full;
+      if (r.ctx) d.dataset.vscodeContext = r.ctx;
       d.addEventListener('click', () => {
         selected = r.full;
         if (r.dir) { expanded.has(r.full) ? expanded.delete(r.full) : expanded.add(r.full); }

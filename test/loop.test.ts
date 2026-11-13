@@ -213,6 +213,24 @@ test('tests that inject a class the plan does not have stop the run at Tests fir
   assert.equal(done.stages.find((x) => x.id === 'code')!.status, 'skipped');
 });
 
+test('when the generators wrote every file, nothing is asked of the local tester', async () => {
+  const dev = await developer(0, { code: '', check: 'ok', attempts: 1, trace: [], report: '' });
+  const root = project();
+  const config = { ...defaultConfig('backend'), preflight: false, developerUrl: dev.url, retry: { attempts: 1, baseMs: 1, maxMs: 1 } };
+  const run = newRun(root, { name: 'p', platform: 'backend', dialect: 'fastapi' }, { ...spec(), pieces: [] });
+  for (const st of run.stages) st.status = ['spec', 'generate', 'plan'].includes(st.id) ? 'passed' : st.id === 'test' ? 'failed' : 'pending';
+  run.stages.find((x) => x.id === 'generate')!.steps.push({ id: 'generate-1', title: 'dragonfly gen resource characters Character', actor: 'shell', status: 'passed', summary: '11 files', log: '', trace: [], files: ['components/characters/data/repositories/character_repository.nuc'] });
+  run.status = 'failed';
+  // the stage alone: the stages after it would run the project's commands
+  const passed = await (new LoopEngine(run, config) as unknown as { testsFirstStage(): Promise<boolean> }).testsFirstStage();
+  dev.close();
+  assert.equal(passed, true);
+  const s = run.stages.find((x) => x.id === 'test')!.steps[0];
+  assert.equal(s.status, 'skipped');
+  assert.match(s.summary, /every file of this run was generated/);
+  assert.equal(dev.calls.filter((c) => c === '/developer/test').length, 0);
+});
+
 test('a spec names its resources: its Resources, else one per GET <url> line', () => {
   const spec = parseSpecMarkdown('# Characters\n\n## Description\n\nthe url:\n\nGET https://rickandmortyapi.com/api/character\n\nGET https://example.com/v1/categories\n\n## Acceptance criteria\n\n- [ ] lists\n', 'x');
   assert.deepEqual(specResources(spec, 'backend'), ['characters Character', 'categories Category']);
@@ -230,4 +248,69 @@ test('the files a generator changed are the difference of two snapshots, without
   fs.writeFileSync(path.join(root, 'components', 'a', 'x.nuc'), 'X');
   fs.writeFileSync(path.join(root, 'build', 'y.nuc'), 'Y');
   assert.deepEqual([...nucFiles(root).keys()], [path.join('components', 'a', 'x.nuc')]);
+});
+
+// ---- the analysis: the strategy of the request decides the run (ADR-0105)
+
+const NO_COMMANDS = { check: [], build: [], test: [], security: [], artifacts: [], seed: [], integration: [], deploy: [] };
+const CARD = { name: 'p', platform: 'backend', dialect: 'fastapi' };
+
+function analysisOf(more: object) {
+  return { strategy: 'strategy:resource-db', title: 'Strategy: a resource stored in the database', why: 'it writes "CRUD"', mode: 'write', stages: ['generate', 'plan', 'test', 'code', 'verify'], lead: 'local', source: 'plan', generate: [], pieces: [], questions: [], limits: [], report: 'the report', trace: [], ...more };
+}
+
+test('a request that lacks a fact its strategy cannot start without stops at the analysis, with the question', async () => {
+  const dev = await service((url) => ({ status: 200, body: url === '/developer/analyze' ? analysisOf({ questions: ['Which fields does it have?', 'Which url?'] }) : { code: '', check: 'ok', attempts: 1, trace: [], report: '' } }));
+  const config = { ...defaultConfig('backend'), preflight: false, developerUrl: dev.url, commands: NO_COMMANDS, retry: { attempts: 1, baseMs: 1, maxMs: 1 } };
+  const done = await new LoopEngine(newRun(project(), CARD, spec()), config).start();
+  dev.close();
+  const s = done.stages[0].steps.find((x) => x.title.startsWith('Analysis'))!;
+  assert.equal(done.status, 'failed');
+  assert.equal(s.summary, 'resource-db: the request does not say: Which fields does it have? (and 1 more: read this step)');
+  assert.equal(s.log, 'the report');
+  assert.equal(done.stages.find((x) => x.id === 'generate')!.status, 'skipped');
+  assert.equal(dev.calls.filter((c) => c === '/developer/plan' || c === '/developer/code').length, 0);
+});
+
+test('a rename runs only its stages and writes the files the tool gave: no agent plans or writes', async () => {
+  const pieces = [{ path: 'components/books/domain/models/book.nuc', kind: '', task: '`Book` is now `Title`.', code: 'Title\n  name: string\n' }];
+  const analysis = analysisOf({ strategy: 'strategy:refactor-rename', title: 'Strategy: a rename', why: 'it writes "rename"', stages: ['plan', 'code', 'verify'], source: 'naming', pieces });
+  const dev = await service((url) => ({ status: 200, body: url === '/developer/analyze' ? analysis : { code: '', check: 'ok', attempts: 1, trace: [], report: '' } }));
+  const root = project();
+  const config = { ...defaultConfig('backend'), preflight: false, developerUrl: dev.url, commands: NO_COMMANDS, retry: { attempts: 1, baseMs: 1, maxMs: 1 } };
+  const done = await new LoopEngine(newRun(root, CARD, spec()), config).start();
+  dev.close();
+  const status = (id: string) => done.stages.find((x) => x.id === id)!.status;
+  assert.equal(done.status, 'passed');
+  assert.equal(fs.readFileSync(path.join(root, 'components/books/domain/models/book.nuc'), 'utf8'), 'Title\n  name: string\n');
+  assert.deepEqual(['generate', 'test', 'security', 'artifacts', 'deploy'].map(status), ['skipped', 'skipped', 'skipped', 'skipped', 'skipped']);
+  assert.deepEqual(['plan', 'code'].map(status), ['passed', 'passed']);
+  assert.equal(done.stages.find((x) => x.id === 'generate')!.steps[0].summary, 'refactor-rename runs plan, code, verify');
+  assert.equal(dev.calls.filter((c) => c === '/developer/plan' || c === '/developer/code' || c === '/developer/test').length, 0);
+  assert.match(journalMarkdown(done), /- Strategy: refactor-rename · a rename \(it writes "rename"\)/);
+});
+
+test('a request that is not a run (a question, a command) stops at the analysis; a Developer without an analyst changes nothing', async () => {
+  const none = await service((url) => ({ status: 200, body: url === '/developer/analyze' ? analysisOf({ strategy: 'strategy:question', title: 'Strategy: a question', mode: 'answer', stages: [] }) : { code: '', check: 'ok', attempts: 1, trace: [], report: '' } }));
+  const config = { ...defaultConfig('backend'), preflight: false, commands: NO_COMMANDS, retry: { attempts: 1, baseMs: 1, maxMs: 1 } };
+  const stopped = await new LoopEngine(newRun(project(), CARD, spec()), { ...config, developerUrl: none.url }).start();
+  none.close();
+  assert.equal(stopped.status, 'failed');
+  assert.match(stopped.stages[0].steps.find((x) => x.title.startsWith('Analysis'))!.summary, /question: this kind of request is not a run of the Loop \(ask it in the chat\)/);
+  // an older Developer answers 404 to /developer/analyze: the run goes on with every stage, as before
+  const old = await service((url) => (url === '/developer/analyze' ? { status: 404, body: { detail: 'Not Found' } } : { status: 200, body: { code: 'Book\n  title: string\n', check: 'ok', attempts: 1, trace: [], report: '', pieces: [] } }));
+  const run = newRun(project(), CARD, { ...spec(), pieces: [{ path: 'components/books/domain/models/book.nuc', kind: 'model', task: 'model Book' }] });
+  const done = await new LoopEngine(run, { ...config, developerUrl: old.url }).start();
+  old.close();
+  const s = done.stages[0].steps.find((x) => x.title.startsWith('Analysis'))!;
+  assert.equal(s.status, 'skipped');
+  assert.match(s.summary, /no analysis, every stage runs/);
+  assert.equal(done.analysis, undefined);
+  assert.equal(done.stages.find((x) => x.id === 'code')!.status, 'passed');
+});
+
+test('a spec may name its strategy, and its file keeps it', () => {
+  assert.equal(parseSpecMarkdown(specMarkdown({ ...spec(), strategy: 'usecase' }), 'books').strategy, 'usecase');
+  assert.match(specMarkdown({ ...spec(), strategy: 'usecase' }), /^- Use case: feature\n- Strategy: usecase\n/m);
+  assert.equal(parseSpecMarkdown(specMarkdown(spec()), 'books').strategy, undefined);
 });

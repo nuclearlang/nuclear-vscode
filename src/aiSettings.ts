@@ -3,6 +3,7 @@
 // defaults; a project's `.nuclear/loop.json` still wins (it is shared with CI). Jira's credentials live in the secret
 // storage.
 import * as vscode from 'vscode';
+import { readMachine } from './aiSetup';
 import { JiraAuth, LoopConfig, RetryPolicy, toolEnv } from './loopEngine';
 
 export const JIRA_SECRET = 'nuclear.loop.jira';
@@ -23,13 +24,19 @@ export interface AiSettings {
 
 export function aiSettings(): AiSettings {
   const c = vscode.workspace.getConfiguration('nuclear.ai');
+  // a model the user set in the editor wins; else the one of the profile the set-up installed (ADR-0106)
+  const machine = readMachine();
+  const model = (key: string, chosen: string | undefined) => {
+    const i = c.inspect<string>(key);
+    return i?.workspaceFolderValue ?? i?.workspaceValue ?? i?.globalValue ?? chosen ?? i?.defaultValue ?? '';
+  };
   return {
     developerUrl: c.get('developerUrl', 'http://127.0.0.1:7879'),
     graphUrl: c.get('graphUrl', 'http://127.0.0.1:7878'),
     ollamaUrl: c.get('ollamaUrl', 'http://localhost:11434'),
-    coderModel: c.get('models.coder', 'qwen2.5-coder:3b'),
-    assistantModel: c.get('models.assistant', 'gemma4:e2b'),
-    embeddingsModel: c.get('models.embeddings', 'embeddinggemma'),
+    coderModel: model('models.coder', machine.CODER_MODEL),
+    assistantModel: model('models.assistant', machine.ASSISTANT_MODEL),
+    embeddingsModel: model('models.embeddings', machine.NUCLEAR_GRAPH_EMBED),
     claudeModel: c.get('claudeModel', 'sonnet'),
     mcpCommand: c.get('mcpCommand', 'nuclear-graph'),
     contextTokens: c.get('contextTokens', 8192),

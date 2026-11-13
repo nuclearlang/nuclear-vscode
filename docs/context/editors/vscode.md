@@ -138,6 +138,28 @@ actions `ctrl+alt+r/g/l/b/t/c` on `nuclear.action.*`, `serve` on `ctrl+alt+r` fo
 `Workspace.onDidChange`; opened on activation when `nuclear.workspace.welcome` and every tab group is empty;
 `onStartupFinished` activation). Not run in a VS Code window yet.
 
+## `src/aiSetup.ts`, `src/aiSetup.json`, `src/setupPanel.ts` — the set-up of the AI services (ADR-0106)
+
+- `aiSetup.ts` has no editor in it: `nuclear-loop setup` (`loopCli.ts`) and the wizard are its two fronts. It reads
+  the machine (`hardware`), says how a profile sits on it (`fit`, `recommend`), finds what is installed
+  (`requirements`, `status`), and gives the ordered `steps(profile, root)`: the graph's tool (`uv tool install`,
+  editable when the folder is a git checkout), the Developer (`dragonfly install` with a Python 3.12+ that uv finds
+  or brings, and the `nuclear-developer` launcher), the models (Ollama's `/api/pull`, with its progress), the graph's
+  service, the knowledge base (`connect` twice, `ingest`), the Developer's service. Every step can run again.
+- `aiSetup.json` is the data: the requirements (their command, their installer per system, their page) and the
+  profiles (models, download, memory, what works, what does not). Changing a profile is changing this file and
+  measuring it (`nuclear-developer/eval/run.py`); `test/setup.test.ts` holds its shape.
+- The machine's choice is `machineFile()` (`~/.config/nuclearlang/ai.env`): `readMachine` gives the Loop
+  (`defaultConfig`) and the editor (`aiSettings`) their default models; a model set in the editor's settings wins and
+  is written there when the settings page restarts a service.
+- `serviceFiles(platform)` are the files that start the services at login (systemd user units, launch agents, a
+  Startup script); `restartService` goes through the system's manager, and the settings page uses it before starting
+  a process of its own. `remove()` is `nuclear-loop setup --remove`.
+- `setupPanel.ts` is the page: four steps drawn from one state message; it polls `check` every three seconds on the
+  requirements step; an installer runs in a terminal (`createTerminal` + `sendText`), never hidden.
+  `SetupPanel.offer` asks once on a machine with no machine file.
+- The services' folder is `aiRoot()`: `<installation>/ai`, or `NUCLEAR_AI_ROOT`.
+
 ## `src/settingsPanel.ts`, `src/aiSettings.ts`, `src/localModels.ts` — Settings and integrations (ADR-0102 §18)
 
 The tool `settings` (`Ctrl+Alt+S`). `aiSettings()` reads `nuclear.ai.*` (package.json `contributes.configuration`);
@@ -191,7 +213,12 @@ reads the files back), `diagnose()` asks `/developer/diagnose` when a stage fail
 plan → tests first → code → verify → security → artifacts → deploy (generate, ADR-0103: `specResources` — the spec's
 `## Resources` or its `GET <url>` lines — through `dragonfly gen resource ... --from-spec`, the changed files found by
 `nucFiles` snapshots and put in the write ledger, `Step.files`; the planner gets `generatedNote()` and
-`withoutGenerated` drops a piece that repeats one) and saves `.nuclear/loop/runs/<id>.json` on every step (`change` event);
+`withoutGenerated` drops a piece that repeats one; the strategy of the request, ADR-0105: `analyze()` is the last
+step of the spec stage and asks `/developer/analyze`, `Run.analysis` — its `stages` skip the others in `stages()`, its
+`generate` calls join the spec's in `generateStage` through `gen()`, its `pieces` are the plan when the tools gave them
+and a piece with `code` is written as it is, `wire()` runs `dragonfly gen usecase` for each use case the coder wrote,
+`verifyStage` repairs the file a failure names for `mode: fix`, never a test; `Spec.strategy` is the spec's `- Strategy:`
+line) and saves `.nuclear/loop/runs/<id>.json` on every step (`change` event);
 `specs/<id>/spec.md` is written by the spec stage. Agents: the Nuclear Developer over HTTP (`developerUrl`), Claude
 through `claude -p --output-format stream-json` with the Nuclear MCP (`graphCommand mcp`, `--strict-mcp-config`,
 `--tools` limited to the stage's built-ins): every tool call is a step, `developer_*` calls drawn as the local agent.

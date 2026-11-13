@@ -9,6 +9,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import * as vscode from 'vscode';
 import { aiSettings, JIRA_SECRET, jiraAuth, serviceEnv } from './aiSettings';
+import { readMachine, restartService, serviceFiles, writeMachine } from './aiSetup';
 import { billionsOf, MAX_BILLIONS } from './localModels';
 import { checkAll } from './connections';
 import { notices } from './notifications';
@@ -22,7 +23,7 @@ type Message =
   | { type: 'allow' | 'deny'; id: string }
   | { type: 'revoke'; client: string }
   | { type: 'connectMcp' }
-  | { type: 'jira' | 'jiraOff' | 'openSettings' };
+  | { type: 'jira' | 'jiraOff' | 'openSettings' | 'setup' };
 
 export interface LocalModel {
   name: string;
@@ -152,7 +153,8 @@ export class SettingsPanel {
     this.post({
       type: 'state',
       settings: s,
-      services: { graph, developer, ollama, own: [...own.keys()] },
+      services: { graph, developer, ollama, own: [...own.keys()], atLogin: serviceFiles().length > 0 && serviceFiles().every((f) => fs.existsSync(f.path)) },
+      profile: readMachine().NUCLEAR_AI_PROFILE ?? '',
       models,
       max: MAX_BILLIONS,
       mcp,
@@ -203,6 +205,9 @@ export class SettingsPanel {
       case 'openSettings':
         await vscode.commands.executeCommand('workbench.action.openSettings', 'nuclear.ai');
         return;
+      case 'setup':
+        await vscode.commands.executeCommand('nuclear.ai.setup');
+        return;
     }
   }
 
@@ -210,6 +215,13 @@ export class SettingsPanel {
   private async start(service: 'graph' | 'developer'): Promise<void> {
     const s = aiSettings();
     const [cmd, args, url] = service === 'graph' ? [s.mcpCommand, ['serve'], s.graphUrl + '/v1/health'] : ['nuclear-developer', [], s.developerUrl + '/docs'];
+    // the services the set-up left in this system (ADR-0106) start with the machine's file: the models chosen here go
+    // there, and the system's manager starts the service again
+    if (readMachine().NUCLEAR_AI_MODE === 'local') writeMachine({ CODER_MODEL: s.coderModel, ASSISTANT_MODEL: s.assistantModel, NUCLEAR_GRAPH_EMBED: s.embeddingsModel });
+    if (!own.has(service) && (await restartService(service))) {
+      for (let i = 0; i < 40 && !(await up(url)); i++) await new Promise((r) => setTimeout(r, 500));
+      return this.state();
+    }
     const mine = own.get(service);
     if (mine) {
       mine.kill();
@@ -220,7 +232,8 @@ export class SettingsPanel {
       return;
     }
     if ((await run('sh', ['-c', 'command -v "$1"', 'sh', cmd])).code !== 0) {
-      void vscode.window.showErrorMessage(`${cmd} is not installed: run ./install.sh --ai in the NuclearLang repository.`);
+      const go = await vscode.window.showErrorMessage(`${cmd} is not installed.`, 'Set up the AI services');
+      if (go) await vscode.commands.executeCommand('nuclear.ai.setup');
       return;
     }
     const p = spawn(cmd, args, { env: serviceEnv(), stdio: 'ignore' });
@@ -323,7 +336,7 @@ function modelSelect(key, label, value, help) {
   return '<label>' + esc(label) + '<div class="muted">' + esc(help) + '</div></label><div><select data-key="' + key + '">' + opts + '</select>' + warn + '</div>';
 }
 function service(id, name, on, what, startable) {
-  return '<div class="card"><span class="dot ' + (on ? 'on' : 'off') + '"></span><div class="grow"><b>' + esc(name) + '</b> <span class="muted">' + esc(what) + '</span></div>' + (startable ? '<button data-start="' + id + '">' + (S.services.own.includes(id) ? 'Restart' : on ? 'Running' : 'Start') + '</button>' : '') + '</div>';
+  return '<div class="card"><span class="dot ' + (on ? 'on' : 'off') + '"></span><div class="grow"><b>' + esc(name) + '</b> <span class="muted">' + esc(what) + '</span></div>' + (startable ? '<button data-start="' + id + '">' + (S.services.own.includes(id) || (S.services.atLogin && on) ? 'Restart' : on ? 'Running' : 'Start') + '</button>' : '') + '</div>';
 }
 function draw() {
   const s = S.settings;
@@ -336,7 +349,7 @@ function draw() {
   document.getElementById('root').innerHTML =
     '<h2>Connections, checked now</h2><div class="muted">Every external connection, checked before each task and every ' + I.checkEveryMinutes + ' min; a notification says when one stops answering.</div>'
     + S.checks.map(check).join('')
-    + '<h2>Services</h2>'
+    + '<h2>Services</h2><div class="muted" style="margin-bottom:8px">' + (S.profile ? 'Profile <b>' + esc(S.profile) + '</b>' + (S.services.atLogin ? ', started at every login' : '') + '. ' : 'Not set up yet. ') + '<button data-act="setup">Set-up…</button></div>'
     + service('graph', 'Nuclear Smart Graph', S.services.graph, s.graphUrl + ' · the private knowledge base and the MCP server', true)
     + service('developer', 'Nuclear Developer', S.services.developer, s.developerUrl + ' · the local agents (started with the models below)', true)
     + service('ollama', 'Ollama', S.services.ollama, s.ollamaUrl + ' · runs the local models', false)

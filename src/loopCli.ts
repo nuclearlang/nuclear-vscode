@@ -5,9 +5,12 @@
 //   nuclear-loop ci [stage...]                                   the deterministic stages of .nuclear/loop.json
 //   nuclear-loop export github|gitlab|bitbucket                  writes the CI file of .nuclear/loop.json
 //   nuclear-loop runs                                            the runs of this project
+//   nuclear-loop setup [--profile <id>] [--yes] | --status | --remove   the AI services of this machine (ADR-0106)
 import { spawn } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import * as readline from 'node:readline';
+import { PROFILES, aiRoot, fit, hardware, machineFile, profileOf, recommend, remove, requirements, status, steps } from './aiSetup';
 import { CI_STAGES, CiProvider, LoopEngine, Run, StageId, ciCommands, ciFile, listRuns, newRun, parseSpecMarkdown, readConfig, toolEnv } from './loopEngine';
 import { orphaned } from './loopSafety';
 
@@ -23,6 +26,15 @@ const USAGE = `nuclear-loop — the Nuclear Loop without the editor
   nuclear-loop ci [check|test|security|artifacts|deploy ...]   the commands of .nuclear/loop.json (all by default)
   nuclear-loop export github|gitlab|bitbucket        writes the CI file that runs \`nuclear-loop ci\`
   nuclear-loop runs                                  the runs kept in .nuclear/loop/runs
+  nuclear-loop setup [--profile remote|lite|medium|hard] [--yes] | --status | --remove
+                                                     the AI services of this machine, step by step: it reads the
+                                                     hardware, suggests a profile (which models are downloaded and how
+                                                     far each works), installs what is missing (uv, Ollama), the
+                                                     Smart Graph and the Nuclear Developer, downloads the models, loads
+                                                     the knowledge base and starts the services, now and at every login
+                                                     (--yes: no questions, the suggested profile; --status: what is
+                                                     installed and running; --remove: takes the services away, Ollama
+                                                     and its models stay)
 
 Run it in the project or any folder inside it (the project is the closest folder up with config.nuc). The agent stages need the Nuclear Developer
 (127.0.0.1:7879) and, when Claude leads, Claude Code with the Nuclear MCP server.`;
@@ -51,6 +63,92 @@ function sh(command: string, cwd: string, quiet = false): Promise<number> {
     p.on('close', (code) => resolve(code ?? 1));
     p.on('error', () => resolve(127));
   });
+}
+
+async function ask(question: string, fallback: string): Promise<string> {
+  if (!process.stdin.isTTY) return fallback;
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  const answer = await new Promise<string>((resolve) => rl.question(question, resolve));
+  rl.close();
+  return answer.trim() || fallback;
+}
+
+/** The AI services of this machine, in a terminal: the same steps as the editor's set-up (aiSetup.ts). */
+async function setup(args: string[]): Promise<number> {
+  if (args.includes('--remove')) {
+    await remove(console.log);
+    console.log("The AI services are removed. Ollama, its models and the graph's data stay.");
+    return 0;
+  }
+  if (args.includes('--status')) {
+    const st = await status();
+    const on = (ok: boolean) => (ok ? 'running' : 'not running');
+    console.log(st.machine.NUCLEAR_AI_MODE ? `profile ${st.machine.NUCLEAR_AI_PROFILE} (${machineFile()})` : 'not set up: nuclear-loop setup');
+    if (st.machine.NUCLEAR_AI_MODE !== 'local') return st.machine.NUCLEAR_AI_MODE ? 0 : 1;
+    console.log(`Smart Graph        ${on(st.graph)}\nNuclear Developer  ${on(st.developer)}\nOllama             ${on(st.ollama)}`);
+    console.log(`models             ${st.missingModels.length ? 'missing ' + st.missingModels.join(', ') : 'installed'}\nat login           ${st.atLogin ? 'yes' : 'no'}`);
+    return st.graph && st.developer && st.ollama && !st.missingModels.length ? 0 : 1;
+  }
+  const yes = args.includes('--yes');
+  const hw = await hardware();
+  const suggested = recommend(hw);
+  console.log(`This machine: ${hw.cpu}, ${hw.cores} threads, ${hw.ram} GB of memory, ${hw.gpu || 'no GPU with memory of its own'}, ${hw.disk} GB of disk free.\n`);
+  for (const p of PROFILES) {
+    const f = fit(p, hw);
+    console.log(`${p.id === suggested ? '→' : ' '} ${p.id.padEnd(7)} ${p.title}: downloads ${p.gb} GB${p.id === suggested ? '   (suggested for this machine)' : ''}`);
+    console.log(`          ${p.summary}`);
+    if (p.coder) console.log(`          ${f.fit === 'no' ? '✗ not for this machine' : f.fit === 'tight' ? '! tight on this machine' : 'on this machine'}: ${f.note}`);
+    if (p.coder) console.log(`          measured: ${p.measured}`);
+    for (const w of p.works) console.log(`          ✓ ${w}`);
+    for (const l of p.limits) console.log(`          ✗ ${l}`);
+    console.log('');
+  }
+  const given = args.includes('--profile') ? args[args.indexOf('--profile') + 1] : undefined;
+  const p = profileOf(given ?? (yes ? suggested : await ask(`Which one? ${PROFILES.map((x) => x.id).join(', ')} [${suggested}]: `, suggested)));
+  if (!p) {
+    console.error(`no such profile: ${PROFILES.map((x) => x.id).join(', ')}`);
+    return 2;
+  }
+  const f = fit(p, hw);
+  if (f.fit === 'no' && !/^y/i.test(yes ? 'y' : await ask(`${p.title} is not for this machine (${f.note}). Install it anyway? [y/N]: `, 'n'))) return 1;
+
+  // what it needs, found or installed by its own installer, one at a time
+  for (;;) {
+    const missing = (await requirements(!!p.coder)).find((r) => !r.found);
+    if (!missing) break;
+    const command = missing.install[process.platform];
+    console.log(`\n${missing.title} is needed (${missing.why}): ${missing.detail}.`);
+    const by = `Install it from ${missing.url} and run \`nuclear-loop setup\` again${missing.local ? ', or choose the profile `remote`' : ''}.`;
+    if (!command || missing.detail.startsWith('installed, not running')) {
+      console.log(command ? 'Start it and run `nuclear-loop setup` again.' : by);
+      return 1;
+    }
+    if (missing.note?.[process.platform]) console.log(missing.note[process.platform]);
+    if (!/^y/i.test(yes ? 'y' : await ask(`Install it now with \`${command}\`? [Y/n]: `, 'y'))) {
+      console.log(by);
+      return 1;
+    }
+    await sh(command, process.cwd());
+    let found = false;
+    for (let i = 0; i < 20 && !found; i++) {
+      found = (await requirements(!!p.coder)).find((r) => r.id === missing.id)?.found ?? false;
+      if (!found) await new Promise((r) => setTimeout(r, 1500));
+    }
+    if (!found) {
+      console.log(`${missing.title} is still not found. ${by}`);
+      return 1;
+    }
+  }
+
+  const all = steps(p, aiRoot()!);
+  for (const [i, step] of all.entries()) {
+    console.log(`\n[${i + 1}/${all.length}] ${step.title}`);
+    await step.run((line) => console.log(`    ${line}`));
+  }
+  console.log(p.coder
+    ? `\nDone: the Smart Graph (127.0.0.1:7878) and the Nuclear Developer (127.0.0.1:7879) run with the profile ${p.id}, now and at every login.\nYour agents: nuclear-graph mcp (claude mcp add --scope user nuclear -- nuclear-graph mcp). State: nuclear-loop setup --status`
+    : '\nDone: add the MCP server to your agent (claude mcp add --scope user nuclear -- nuclear-graph mcp). The local agents: nuclear-loop setup again, another profile.');
+  return 0;
 }
 
 async function ci(root: string, only: string[]): Promise<number> {
@@ -168,6 +266,8 @@ async function main(argv: string[]): Promise<number> {
       console.log(`wrote ${out.path}`);
       return 0;
     }
+    case 'setup':
+      return setup(rest);
     case 'runs':
       for (const r of listRuns(root)) {
         const lost = r.status === 'running' && orphaned(r.owner);

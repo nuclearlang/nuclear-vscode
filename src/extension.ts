@@ -1,6 +1,7 @@
 // VS Code client for the NuclearLang language server (nuclear-lsp).
 
 import { SettingsPanel } from './settingsPanel';
+import { SetupPanel } from './setupPanel';
 import { execFile } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -78,6 +79,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   debugNuc = activateDebug(context, (dir?: string) => (dir ? dragonflyOf(path.join(dir, '_')) : findDragonfly()));
   const http = activateHttp(context);
   activateWorkspace(context, http);
+  // the set-up of the AI services (ADR-0106): a command, and an offer on a machine that was never set up
+  context.subscriptions.push(vscode.commands.registerCommand('nuclear.ai.setup', () => SetupPanel.show()));
+  void SetupPanel.offer(context);
   activateDevice(context, findDragonfly, (deviceId, extra, root, noDebug) => runApp(noDebug ?? false, deviceId, extra, root));
   // a web project's app: from the workspace `dragonfly build` writes, or (never built yet) its default place
   // a web project's app: its card (output, toolchain) and the dragonfly of its workspace (else the one on the PATH)

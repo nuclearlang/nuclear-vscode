@@ -2,7 +2,7 @@
   "name": "nuclearlang",
   "displayName": "NuclearLang",
   "description": "NuclearLang (.nuc) support: the Nuclear workspace (projects as tabs, tools full screen, keyboard first), language server, semantic highlighting, code metrics, the Dragonfly dialects (flutter, fastapi, nestjs, react) and the Chernobyl theme",
-  "version": "0.44.0",
+  "version": "0.48.0",
   "publisher": "nuclearlang",
   "license": "Apache-2.0",
   "icon": "icons/icon.png",
@@ -901,6 +901,11 @@
         "category": "Nuclear"
       },
       {
+        "command": "nuclear.ai.setup",
+        "title": "Set Up the AI Services",
+        "category": "Nuclear"
+      },
+      {
         "command": "nuclear.workspace.tool",
         "title": "Open a Tool",
         "category": "Nuclear"
@@ -1110,6 +1115,161 @@
         "title": "Reload the web device",
         "category": "Nuclear",
         "icon": "$(refresh)"
+      },
+      {
+        "command": "nuclear.tree.make.usecase",
+        "title": "New Use case",
+        "category": "Dragonfly"
+      },
+      {
+        "command": "nuclear.tree.make.model",
+        "title": "New Model",
+        "category": "Dragonfly"
+      },
+      {
+        "command": "nuclear.tree.make.service",
+        "title": "New Service",
+        "category": "Dragonfly"
+      },
+      {
+        "command": "nuclear.tree.make.aggregate",
+        "title": "New Aggregate",
+        "category": "Dragonfly"
+      },
+      {
+        "command": "nuclear.tree.make.repository",
+        "title": "New Repository",
+        "category": "Dragonfly"
+      },
+      {
+        "command": "nuclear.tree.make.entity",
+        "title": "New Entity",
+        "category": "Dragonfly"
+      },
+      {
+        "command": "nuclear.tree.make.controller",
+        "title": "New Controller",
+        "category": "Dragonfly"
+      },
+      {
+        "command": "nuclear.tree.make.listener",
+        "title": "New Listener",
+        "category": "Dragonfly"
+      },
+      {
+        "command": "nuclear.tree.make.agent",
+        "title": "New Agent",
+        "category": "Dragonfly"
+      },
+      {
+        "command": "nuclear.tree.make.graph",
+        "title": "New Graph",
+        "category": "Dragonfly"
+      },
+      {
+        "command": "nuclear.tree.make.tools",
+        "title": "New Tools",
+        "category": "Dragonfly"
+      },
+      {
+        "command": "nuclear.tree.make.state",
+        "title": "New State",
+        "category": "Dragonfly"
+      },
+      {
+        "command": "nuclear.tree.make.stateful",
+        "title": "New Stateful widget",
+        "category": "Dragonfly"
+      },
+      {
+        "command": "nuclear.tree.make.stateless",
+        "title": "New Stateless widget",
+        "category": "Dragonfly"
+      },
+      {
+        "command": "nuclear.tree.make.statemodel",
+        "title": "New State model",
+        "category": "Dragonfly"
+      },
+      {
+        "command": "nuclear.tree.make.statemanager",
+        "title": "New State manager",
+        "category": "Dragonfly"
+      },
+      {
+        "command": "nuclear.tree.make.widget",
+        "title": "New Shared widget",
+        "category": "Dragonfly"
+      },
+      {
+        "command": "nuclear.tree.make.guard",
+        "title": "New Guard",
+        "category": "Dragonfly"
+      },
+      {
+        "command": "nuclear.tree.make.event",
+        "title": "New Event",
+        "category": "Dragonfly"
+      },
+      {
+        "command": "nuclear.tree.make.global",
+        "title": "New Global component",
+        "category": "Dragonfly"
+      },
+      {
+        "command": "nuclear.tree.make.page",
+        "title": "New Page",
+        "category": "Dragonfly"
+      },
+      {
+        "command": "nuclear.tree.make.integration",
+        "title": "New Integration test",
+        "category": "Dragonfly"
+      },
+      {
+        "command": "nuclear.tree.make.component",
+        "title": "New Component",
+        "category": "Dragonfly"
+      },
+      {
+        "command": "nuclear.tree.make.screen",
+        "title": "New Screen",
+        "category": "Dragonfly"
+      },
+      {
+        "command": "nuclear.tree.make.config",
+        "title": "New Config",
+        "category": "Dragonfly"
+      },
+      {
+        "command": "nuclear.tree.make.test",
+        "title": "New Test",
+        "category": "Dragonfly"
+      },
+      {
+        "command": "nuclear.tree.make.resource",
+        "title": "New Resource (from fields)",
+        "category": "Dragonfly"
+      },
+      {
+        "command": "nuclear.tree.newFile",
+        "title": "New File…",
+        "category": "Nuclear"
+      },
+      {
+        "command": "nuclear.tree.newFolder",
+        "title": "New Folder…",
+        "category": "Nuclear"
+      },
+      {
+        "command": "nuclear.tree.rename",
+        "title": "Rename…",
+        "category": "Nuclear"
+      },
+      {
+        "command": "nuclear.tree.delete",
+        "title": "Delete",
+        "category": "Nuclear"
       }
     ],
     "menus": {
@@ -1198,6 +1358,130 @@
         {
           "command": "nuclear.debug.openPlace",
           "when": "false"
+        },
+        {
+          "command": "nuclear.tree.make.usecase",
+          "when": "false"
+        },
+        {
+          "command": "nuclear.tree.make.model",
+          "when": "false"
+        },
+        {
+          "command": "nuclear.tree.make.service",
+          "when": "false"
+        },
+        {
+          "command": "nuclear.tree.make.aggregate",
+          "when": "false"
+        },
+        {
+          "command": "nuclear.tree.make.repository",
+          "when": "false"
+        },
+        {
+          "command": "nuclear.tree.make.entity",
+          "when": "false"
+        },
+        {
+          "command": "nuclear.tree.make.controller",
+          "when": "false"
+        },
+        {
+          "command": "nuclear.tree.make.listener",
+          "when": "false"
+        },
+        {
+          "command": "nuclear.tree.make.agent",
+          "when": "false"
+        },
+        {
+          "command": "nuclear.tree.make.graph",
+          "when": "false"
+        },
+        {
+          "command": "nuclear.tree.make.tools",
+          "when": "false"
+        },
+        {
+          "command": "nuclear.tree.make.state",
+          "when": "false"
+        },
+        {
+          "command": "nuclear.tree.make.stateful",
+          "when": "false"
+        },
+        {
+          "command": "nuclear.tree.make.stateless",
+          "when": "false"
+        },
+        {
+          "command": "nuclear.tree.make.statemodel",
+          "when": "false"
+        },
+        {
+          "command": "nuclear.tree.make.statemanager",
+          "when": "false"
+        },
+        {
+          "command": "nuclear.tree.make.widget",
+          "when": "false"
+        },
+        {
+          "command": "nuclear.tree.make.guard",
+          "when": "false"
+        },
+        {
+          "command": "nuclear.tree.make.event",
+          "when": "false"
+        },
+        {
+          "command": "nuclear.tree.make.global",
+          "when": "false"
+        },
+        {
+          "command": "nuclear.tree.make.page",
+          "when": "false"
+        },
+        {
+          "command": "nuclear.tree.make.integration",
+          "when": "false"
+        },
+        {
+          "command": "nuclear.tree.make.component",
+          "when": "false"
+        },
+        {
+          "command": "nuclear.tree.make.screen",
+          "when": "false"
+        },
+        {
+          "command": "nuclear.tree.make.config",
+          "when": "false"
+        },
+        {
+          "command": "nuclear.tree.make.test",
+          "when": "false"
+        },
+        {
+          "command": "nuclear.tree.make.resource",
+          "when": "false"
+        },
+        {
+          "command": "nuclear.tree.newFile",
+          "when": "false"
+        },
+        {
+          "command": "nuclear.tree.newFolder",
+          "when": "false"
+        },
+        {
+          "command": "nuclear.tree.rename",
+          "when": "false"
+        },
+        {
+          "command": "nuclear.tree.delete",
+          "when": "false"
         }
       ],
       "debug/toolBar": [
@@ -1212,6 +1496,170 @@
           "command": "nuclear.debug.otherSide",
           "when": "inDebugMode && (resourceExtname == .nuc || resourceExtname == .dart)",
           "group": "navigation@0"
+        }
+      ],
+      "nuclear.tree.new": [
+        {
+          "command": "nuclear.tree.make.usecase",
+          "when": "webviewId == 'nuclear.workspace' && webviewSection == 'file' && nuclearMake =~ / usecase /",
+          "group": "1_make"
+        },
+        {
+          "command": "nuclear.tree.make.model",
+          "when": "webviewId == 'nuclear.workspace' && webviewSection == 'file' && nuclearMake =~ / model /",
+          "group": "1_make"
+        },
+        {
+          "command": "nuclear.tree.make.service",
+          "when": "webviewId == 'nuclear.workspace' && webviewSection == 'file' && nuclearMake =~ / service /",
+          "group": "1_make"
+        },
+        {
+          "command": "nuclear.tree.make.aggregate",
+          "when": "webviewId == 'nuclear.workspace' && webviewSection == 'file' && nuclearMake =~ / aggregate /",
+          "group": "1_make"
+        },
+        {
+          "command": "nuclear.tree.make.repository",
+          "when": "webviewId == 'nuclear.workspace' && webviewSection == 'file' && nuclearMake =~ / repository /",
+          "group": "1_make"
+        },
+        {
+          "command": "nuclear.tree.make.entity",
+          "when": "webviewId == 'nuclear.workspace' && webviewSection == 'file' && nuclearMake =~ / entity /",
+          "group": "1_make"
+        },
+        {
+          "command": "nuclear.tree.make.controller",
+          "when": "webviewId == 'nuclear.workspace' && webviewSection == 'file' && nuclearMake =~ / controller /",
+          "group": "1_make"
+        },
+        {
+          "command": "nuclear.tree.make.listener",
+          "when": "webviewId == 'nuclear.workspace' && webviewSection == 'file' && nuclearMake =~ / listener /",
+          "group": "1_make"
+        },
+        {
+          "command": "nuclear.tree.make.agent",
+          "when": "webviewId == 'nuclear.workspace' && webviewSection == 'file' && nuclearMake =~ / agent /",
+          "group": "1_make"
+        },
+        {
+          "command": "nuclear.tree.make.graph",
+          "when": "webviewId == 'nuclear.workspace' && webviewSection == 'file' && nuclearMake =~ / graph /",
+          "group": "1_make"
+        },
+        {
+          "command": "nuclear.tree.make.tools",
+          "when": "webviewId == 'nuclear.workspace' && webviewSection == 'file' && nuclearMake =~ / tools /",
+          "group": "1_make"
+        },
+        {
+          "command": "nuclear.tree.make.state",
+          "when": "webviewId == 'nuclear.workspace' && webviewSection == 'file' && nuclearMake =~ / state /",
+          "group": "1_make"
+        },
+        {
+          "command": "nuclear.tree.make.stateful",
+          "when": "webviewId == 'nuclear.workspace' && webviewSection == 'file' && nuclearMake =~ / stateful /",
+          "group": "1_make"
+        },
+        {
+          "command": "nuclear.tree.make.stateless",
+          "when": "webviewId == 'nuclear.workspace' && webviewSection == 'file' && nuclearMake =~ / stateless /",
+          "group": "1_make"
+        },
+        {
+          "command": "nuclear.tree.make.statemodel",
+          "when": "webviewId == 'nuclear.workspace' && webviewSection == 'file' && nuclearMake =~ / statemodel /",
+          "group": "1_make"
+        },
+        {
+          "command": "nuclear.tree.make.statemanager",
+          "when": "webviewId == 'nuclear.workspace' && webviewSection == 'file' && nuclearMake =~ / statemanager /",
+          "group": "1_make"
+        },
+        {
+          "command": "nuclear.tree.make.widget",
+          "when": "webviewId == 'nuclear.workspace' && webviewSection == 'file' && nuclearMake =~ / widget /",
+          "group": "1_make"
+        },
+        {
+          "command": "nuclear.tree.make.guard",
+          "when": "webviewId == 'nuclear.workspace' && webviewSection == 'file' && nuclearMake =~ / guard /",
+          "group": "1_make"
+        },
+        {
+          "command": "nuclear.tree.make.event",
+          "when": "webviewId == 'nuclear.workspace' && webviewSection == 'file' && nuclearMake =~ / event /",
+          "group": "1_make"
+        },
+        {
+          "command": "nuclear.tree.make.global",
+          "when": "webviewId == 'nuclear.workspace' && webviewSection == 'file' && nuclearMake =~ / global /",
+          "group": "1_make"
+        },
+        {
+          "command": "nuclear.tree.make.page",
+          "when": "webviewId == 'nuclear.workspace' && webviewSection == 'file' && nuclearMake =~ / page /",
+          "group": "1_make"
+        },
+        {
+          "command": "nuclear.tree.make.integration",
+          "when": "webviewId == 'nuclear.workspace' && webviewSection == 'file' && nuclearMake =~ / integration /",
+          "group": "1_make"
+        },
+        {
+          "command": "nuclear.tree.make.component",
+          "when": "webviewId == 'nuclear.workspace' && webviewSection == 'file' && nuclearMake =~ / component /",
+          "group": "1_make"
+        },
+        {
+          "command": "nuclear.tree.make.screen",
+          "when": "webviewId == 'nuclear.workspace' && webviewSection == 'file' && nuclearMake =~ / screen /",
+          "group": "1_make"
+        },
+        {
+          "command": "nuclear.tree.make.config",
+          "when": "webviewId == 'nuclear.workspace' && webviewSection == 'file' && nuclearMake =~ / config /",
+          "group": "1_make"
+        },
+        {
+          "command": "nuclear.tree.make.test",
+          "when": "webviewId == 'nuclear.workspace' && webviewSection == 'file' && nuclearMake =~ / test /",
+          "group": "1_make"
+        },
+        {
+          "command": "nuclear.tree.make.resource",
+          "when": "webviewId == 'nuclear.workspace' && webviewSection == 'file' && nuclearMake =~ / resource /",
+          "group": "1_make"
+        }
+      ],
+      "webview/context": [
+        {
+          "submenu": "nuclear.tree.new",
+          "when": "webviewId == 'nuclear.workspace' && webviewSection == 'file' && nuclearMake =~ /\\S/",
+          "group": "1_new@1"
+        },
+        {
+          "command": "nuclear.tree.newFile",
+          "when": "webviewId == 'nuclear.workspace' && webviewSection == 'file' && nuclearNew",
+          "group": "1_new@2"
+        },
+        {
+          "command": "nuclear.tree.newFolder",
+          "when": "webviewId == 'nuclear.workspace' && webviewSection == 'file' && nuclearNew",
+          "group": "1_new@3"
+        },
+        {
+          "command": "nuclear.tree.rename",
+          "when": "webviewId == 'nuclear.workspace' && webviewSection == 'file' && nuclearEdit",
+          "group": "2_edit@1"
+        },
+        {
+          "command": "nuclear.tree.delete",
+          "when": "webviewId == 'nuclear.workspace' && webviewSection == 'file' && nuclearDel",
+          "group": "2_edit@2"
         }
       ]
     },
@@ -1489,7 +1937,13 @@
           "when": "nuclear.pausedInNuc"
         }
       ]
-    }
+    },
+    "submenus": [
+      {
+        "id": "nuclear.tree.new",
+        "label": "New with Dragonfly"
+      }
+    ]
   },
   "scripts": {
     "compile": "tsc -p . --noEmit && esbuild src/extension.ts --bundle --outfile=out/extension.js --external:vscode --format=cjs --platform=node --target=node18 --sourcemap && npm run loop",
@@ -1498,7 +1952,7 @@
     "theme": "node theme/build.mjs && node theme/icons.mjs",
     "server": "node scripts/bundle-server.mjs",
     "package": "npm run theme && npm run compile && npm run server && vsce package --no-dependencies --allow-missing-repository",
-    "test": "esbuild test/loop.test.ts --bundle --platform=node --target=node18 --external:vscode --outfile=out/test/loop.test.js && node --test out/test/loop.test.js"
+    "test": "esbuild test/loop.test.ts test/setup.test.ts --bundle --platform=node --target=node18 --external:vscode --outdir=out/test && node --test out/test/loop.test.js out/test/setup.test.js"
   },
   "dependencies": {
     "vscode-languageclient": "9.0.1"

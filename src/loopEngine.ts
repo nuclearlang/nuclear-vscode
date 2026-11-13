@@ -6,6 +6,7 @@
 // script can drive it alone.
 import { ChildProcess, spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
+import { readMachine } from './aiSetup';
 import { atomicWrite, BEAT_MS, checkConnections, ollamaBusy, orphaned, owner, Owner, rollback, trace, Write } from './loopSafety';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -64,6 +65,32 @@ export interface Piece {
   path: string;
   kind: string;
   task: string;
+  /** The whole file, when a tool already wrote it (a rename): it is written as it is and no agent is asked. */
+  code?: string;
+}
+
+/** What the local analyst says of a spec before the run does anything (ADR-0105): which kind of request it is (its
+ * strategy, a row of the graph) and what that asks of the run. */
+export interface Analysis {
+  strategy: string;
+  title: string;
+  /** The signs of the request that chose the strategy. */
+  why: string;
+  /** write, repair, verify, review, answer, commands or lead */
+  mode: string;
+  /** The stages that run after the specification. Empty: this kind of request is not a run of the Loop. */
+  stages: string[];
+  lead: string;
+  /** Where the pieces come from: plan (the planner splits what is left), declaring, naming or none. */
+  source: string;
+  /** Arguments of `dragonfly gen`, each one accepted by its dry run. */
+  generate: string[][];
+  /** The pieces the tools already gave: the files that declare what changes, or the files of a rename. */
+  pieces: Piece[];
+  /** The facts the strategy cannot start without and the request does not give. */
+  questions: string[];
+  limits: string[];
+  report: string;
 }
 
 export interface Spec {
@@ -82,6 +109,8 @@ export interface Spec {
   /** What `dragonfly gen resource` generates before the plan: one line of its arguments each (`characters Character
    * --screen characters`). Empty: each `GET <url>` line of the description is a resource. */
   resources?: string[];
+  /** The strategy the spec names itself (`usecase`, `bug-compile`...): the analysis then does not choose. */
+  strategy?: string;
 }
 
 export interface Run {
@@ -98,6 +127,8 @@ export interface Run {
   costUsd: number;
   /** What the local documenter wrote about the run (`/developer/document`), at the top of the journal. */
   notes?: string;
+  /** Which kind of request the spec is and what its strategy asks of the run (`/developer/analyze`). */
+  analysis?: Analysis;
   /** Why the run failed, told by the local diagnoser (`/developer/diagnose`): kind, action and explanation. */
   diagnosis?: string;
   /** The earlier attempts of a run retried from a stage: their stages as they ended. */
@@ -180,7 +211,7 @@ export const ARTIFACTS_DIR = path.join('.nuclear', 'loop', 'artifacts');
 export const SPECS_DIR = 'specs';
 
 const STAGES: Omit<Stage, 'status' | 'steps'>[] = [
-  { id: 'spec', title: 'Specification', about: 'The spec you wrote or imported, with its acceptance criteria and the context the agents get. Written to specs/<id>/spec.md.', actors: ['you'] },
+  { id: 'spec', title: 'Specification', about: 'The spec you wrote or imported, with its acceptance criteria and the context the agents get, written to specs/<id>/spec.md. Then its analysis: which kind of request it is (a whole system, one screen, a rename, a failing test...) and the strategy the run follows: the stages that run, what the generators write, the facts it lacks.', actors: ['you', 'planner'] },
   { id: 'generate', title: 'Generate', about: 'dragonfly gen writes what follows from the data, already compiling: for each resource of the spec (its GET <url> lines, or its Resources) the models, the repository, a use case per action, the facade, the controller or the screen, the tests. The agents write only what is left.', actors: ['shell'] },
   { id: 'plan', title: 'Plan', about: 'The work split into pieces of one file each, in the order they can be written. Claude plans when it leads; otherwise the local planner (gemma4:e2b) does.', actors: ['claude', 'planner', 'graph'] },
   { id: 'test', title: 'Tests first', about: 'Before any code, the local tester writes the tests from the acceptance criteria, the planned pieces and the project map (.nuclear/map.md): what the code must do, in Nuclear.', actors: ['tester', 'graph'] },
@@ -212,8 +243,9 @@ export function defaultConfig(platform: string): LoopConfig {
     retry: { ...DEFAULT_RETRY },
     graphUrl: 'http://127.0.0.1:7878',
     ollamaUrl: 'http://localhost:11434',
-    coderModel: 'qwen2.5-coder:3b',
-    assistantModel: 'gemma4:e2b',
+    // the models of the profile this machine was set up with (ADR-0106), else the heaviest profile's
+    coderModel: readMachine().CODER_MODEL ?? 'qwen2.5-coder:3b',
+    assistantModel: readMachine().ASSISTANT_MODEL ?? 'gemma4:e2b',
     callTimeoutMs: 15 * 60_000,
     stallSeconds: 90,
     minFreeMb: 500,
@@ -281,6 +313,7 @@ export function listRuns(root: string): Run[] {
 /** The spec as markdown (specs/<id>/spec.md): what a reviewer, a CI job or another agent reads. */
 export function specMarkdown(spec: Spec): string {
   const lines = [`# ${spec.title}`, '', `- Use case: ${spec.useCase}`, `- Source: ${spec.source.kind}${spec.source.key ? ` ${spec.source.key}` : ''}${spec.source.url ? ` (${spec.source.url})` : ''}`, `- Lead: ${spec.lead === 'claude' ? 'Claude plans and reviews; the local developer writes' : 'local agents only'}`, '', '## Description', '', spec.description.trim(), '', '## Acceptance criteria', ''];
+  if (spec.strategy) lines.splice(3, 0, `- Strategy: ${spec.strategy}`);
   lines.push(...(spec.criteria.length ? spec.criteria.map((c) => `- [ ] ${c}`) : ['- (none yet)']));
   if (spec.context.length) lines.push('', '## Context', '', ...spec.context.map((c) => `- ${c}`));
   if (spec.resources?.length) lines.push('', '## Resources', '', ...spec.resources.map((r) => `- \`${r}\``));
@@ -316,6 +349,7 @@ export function parseSpecMarkdown(text: string, id: string): Spec {
     lead: field('Lead').startsWith('local') ? 'local' : 'claude',
     pieces,
     resources: items(section('Resources')).map((l) => l.replace(/^`|`$/g, '')),
+    strategy: field('Strategy').replace(/^strategy:/, '') || undefined,
   };
 }
 
@@ -368,6 +402,7 @@ export function journalMarkdown(run: Run): string {
     `- Project: ${run.project} (${run.platform}${run.dialect ? ` · ${run.dialect}` : ''})`,
     `- Lead: ${run.spec.lead === 'claude' ? 'Claude plans and reviews; the local developer writes' : 'the local agents'}${run.costUsd ? ` · Claude USD ${run.costUsd.toFixed(2)}` : ''}`,
     `- Spec: specs/${run.spec.id}/spec.md · the lead's review, once there is one: ${RUNS_DIR}/${run.id}.review.md`,
+    ...(run.analysis ? [`- Strategy: ${run.analysis.strategy.replace(/^strategy:/, '')} · ${run.analysis.title.replace(/^Strategy: /, '')}${run.analysis.why ? ` (${run.analysis.why})` : ''}`] : []),
   ];
   if (run.notes) out.push('', '## What the local developer says', '', run.notes);
   if (run.diagnosis) out.push('', '## Why it failed (local diagnoser)', '', run.diagnosis);
@@ -753,6 +788,15 @@ export class LoopEngine extends EventEmitter {
         stage.status = 'skipped';
         continue;
       }
+      // a stage the strategy of the request has no use for (ADR-0105): a compile error needs no Generate, a rename
+      // no tests first
+      const wanted = this.run.analysis?.stages ?? [];
+      if (id !== 'spec' && wanted.length && !wanted.includes(id)) {
+        this.end(this.step(stage, 'Not part of this kind of request', 'shell'), 'skipped', `${this.run.analysis!.strategy.replace(/^strategy:/, '')} runs ${wanted.join(', ')}`);
+        stage.status = 'skipped';
+        this.save();
+        continue;
+      }
       stage.status = 'running';
       stage.started = Date.now();
       this.save();
@@ -858,7 +902,44 @@ export class LoopEngine extends EventEmitter {
     const c = this.step(stage, 'Acceptance criteria', 'you');
     c.log = spec.criteria.map((x) => `- ${x}`).join('\n');
     this.end(c, spec.criteria.length ? 'passed' : 'failed', spec.criteria.length ? `${spec.criteria.length} criteria` : 'a spec needs at least one acceptance criterion');
-    return spec.criteria.length > 0;
+    return spec.criteria.length > 0 && (await this.analyze(stage));
+  }
+
+  /** Which kind of request the spec is (a whole system, one screen, a rename, a failing test...) and what the strategy
+   * of that kind asks of the run (ADR-0105): asked to the local analyst before anything is generated or planned. It
+   * reads the spec's own words, never the context files. A request that lacks a fact its strategy cannot start
+   * without stops here, with the questions; so does one that is not a run at all (a question, a command). A
+   * Developer without an analyst leaves the run as it always was: every stage. */
+  private async analyze(stage: Stage): Promise<boolean> {
+    const s = this.step(stage, 'Analysis: which kind of request this is', 'planner');
+    const r = await this.developer('/developer/analyze', { spec: this.specPrompt(), platform: this.run.platform, strategy: this.run.spec.strategy ?? '' }, s);
+    if (!r.ok || !r.data.strategy) {
+      this.run.analysis = undefined;
+      this.end(s, 'skipped', r.ok ? 'the graph has no strategies: every stage runs' : `no analysis, every stage runs (${r.error.split('\n')[0]})`);
+      return true;
+    }
+    const a: Analysis = {
+      strategy: String(r.data.strategy), title: String(r.data.title ?? ''), why: String(r.data.why ?? ''), mode: String(r.data.mode ?? 'write'),
+      stages: (r.data.stages ?? []) as string[], lead: String(r.data.lead ?? 'local'), source: String(r.data.source ?? 'plan'),
+      generate: (r.data.generate ?? []) as string[][], pieces: (r.data.pieces ?? []) as Piece[], questions: (r.data.questions ?? []) as string[],
+      limits: (r.data.limits ?? []) as string[], report: String(r.data.report ?? ''),
+    };
+    this.run.analysis = a;
+    s.trace = r.data.trace ?? [];
+    s.log = a.report;
+    const name = a.strategy.replace(/^strategy:/, '');
+    if (a.questions.length) {
+      this.end(s, 'failed', `${name}: the request does not say: ${a.questions[0]}${a.questions.length > 1 ? ` (and ${a.questions.length - 1} more: read this step)` : ''}`);
+      return false;
+    }
+    if (!a.stages.length) {
+      const how = a.mode === 'answer' ? 'ask it in the chat' : a.mode === 'commands' ? 'it is done with commands' : 'it needs a lead or your own hands';
+      this.end(s, 'failed', `${name}: this kind of request is not a run of the Loop (${how}); its plan is in this step`);
+      s.log = `${a.report}\n\nThe plan of ${a.strategy}: nuclear-graph card ${a.strategy}`;
+      return false;
+    }
+    this.end(s, 'passed', `${name}${a.why ? ` (${a.why})` : ''}${a.limits.length ? ` · ${a.limits.length} thing(s) beyond the platform or the local agents: read this step` : ''}`);
+    return true;
   }
 
   private contextText(): string {
@@ -888,35 +969,67 @@ export class LoopEngine extends EventEmitter {
 
   private async generateStage(): Promise<boolean> {
     const stage = this.stage('generate');
-    const resources = specResources(this.run.spec, this.run.platform);
-    if (!resources.length) {
-      this.end(this.step(stage, 'Nothing to generate', 'shell'), 'skipped', 'the spec names no resource (a GET <url> line or a Resources section)');
+    const specFile = path.join(SPECS_DIR, this.run.spec.id, 'spec.md');
+    // what the spec says itself (its Resources, its GET <url> lines), then what the analysis read in its plain words
+    const calls: string[][] = specResources(this.run.spec, this.run.platform).map((resource) => {
+      const words = resource.match(/"[^"]*"|\S+/g) ?? [];
+      return ['resource', ...words, ...(words.some((w) => w === '--from-json' || w === '--from-spec' || w === '--fields') ? [] : ['--from-spec', specFile])];
+    });
+    for (const call of this.run.analysis?.generate ?? []) if (!calls.some((c) => c.slice(0, 3).join(' ') === call.slice(0, 3).join(' '))) calls.push(call);
+    if (!calls.length) {
+      this.end(this.step(stage, 'Nothing to generate', 'shell'), 'skipped', 'the spec names no resource (a GET <url> line, a Resources section, or a thing with its fields in plain words)');
       return true;
     }
-    const specFile = path.join(SPECS_DIR, this.run.spec.id, 'spec.md');
-    for (const resource of resources) {
+    for (const call of calls) {
       if (this.stopped) return false;
-      const words = resource.match(/"[^"]*"|\S+/g) ?? [];
-      const args = ['gen', 'resource', ...words];
-      if (!words.some((w) => w === '--from-json' || w === '--from-spec' || w === '--fields')) args.push('--from-spec', specFile);
-      const command = ['dragonfly', ...args.map((a) => (/^[\w./:,=-]+$/.test(a) ? a : `'${a.replace(/^"|"$/g, '').replace(/'/g, "'\\''")}'`))].join(' ');
-      const before = nucFiles(this.run.root);
-      const s = this.step(stage, command, 'shell', { input: command });
-      const code = await shell(command, this.run.root, (d) => {
-        s.log = (s.log + d).slice(-60000);
-        this.emit('change', this.run);
-      }, (p) => this.children.push(p), this.config.commandTimeoutMs);
-      // what it wrote goes to the ledger, so a crash or a failed run undoes it like an agent's file
-      const after = nucFiles(this.run.root);
-      const changed = [...after].filter(([f, t]) => before.get(f) !== t).map(([f]) => f);
-      for (const f of changed) (this.run.writes ??= []).push({ path: f, step: s.id, before: before.get(f) ?? null, at: Date.now() });
-      s.files = changed;
-      this.save();
-      this.end(s, code === 0 ? 'passed' : 'failed', code === 0 ? `${changed.length} files` : `exit ${code}: ${lastLine(s.log)}`);
-      if (code !== 0) return false;
+      if ((await this.gen(stage, call)) !== 0) return false;
     }
     // the project map the planner and the tester read, with what was generated
     return this.commands(stage, ['nuclear check .'], false);
+  }
+
+  /** One `dragonfly gen` call as a step; answers its exit code. What it wrote goes to the ledger, so a crash or a
+   * failed run undoes it like an agent's file. */
+  private async gen(stage: Stage, call: string[]): Promise<number> {
+    const command = ['dragonfly', 'gen', ...call].map((a) => (/^[\w./:,=-]+$/.test(a) ? a : `'${a.replace(/^"|"$/g, '').replace(/'/g, "'\\''")}'`)).join(' ');
+    const before = nucFiles(this.run.root);
+    const s = this.step(stage, command, 'shell', { input: command });
+    const code = await shell(command, this.run.root, (d) => {
+      s.log = (s.log + d).slice(-60000);
+      this.emit('change', this.run);
+    }, (p) => this.children.push(p), this.config.commandTimeoutMs);
+    const after = nucFiles(this.run.root);
+    const changed = [...after].filter(([f, text]) => before.get(f) !== text).map(([f]) => f);
+    for (const f of changed) (this.run.writes ??= []).push({ path: f, step: s.id, before: before.get(f) ?? null, at: Date.now() });
+    s.files = changed;
+    this.save();
+    this.end(s, code === 0 ? 'passed' : 'failed', code === 0 ? `${changed.length} files` : `exit ${code}: ${lastLine(s.log)}`);
+    return code;
+  }
+
+  /** Each use case the coder wrote is wired by the generator, never by a model (ADR-0105): its alias in the facade
+   * and, on the backend, its route when the spec gives one (`POST orders/{id}/cancel`: in the sentence about it, or
+   * the spec's only route for the run's only use case). Left
+   * alone: a use case the facade already has, and a route when the plan has a controller of that component. A
+   * refusal shows in its step and does not fail the run: the project's check decides. */
+  private async wire(stage: Stage): Promise<void> {
+    // a route the spec gives in another sentence than the one that names the use case is its route when the spec has
+    // one route and the run one use case (an API's `GET https://...` is no route of this project)
+    const routes = [...this.run.spec.description.matchAll(/\b(GET|POST|PUT|PATCH|DELETE)\s+\/?([A-Za-z][\w/{}:-]*)/g)].filter((m) => !m[2].startsWith('http'));
+    const single = new Set(this.written.filter((w) => /\/domain\/usecases\//.test(w.path)).map((w) => w.path)).size === 1 && routes.length === 1 ? routes[0] : null;
+    for (const w of this.written) {
+      const m = /^components\/([^/]+)\/domain\/usecases\/[^/]+\.nuc$/.exec(w.path);
+      const name = /^usecase\s+([A-Z]\w*)/m.exec(w.code)?.[1];
+      if (!m || !name || this.stopped) continue;
+      const component = m[1];
+      const facade = [...nucFiles(this.run.root)].filter(([f]) => f.startsWith(`components/${component}/`) && /component\.nuc$/.test(f));
+      if (facade.some(([, text]) => text.includes(`${name}.exec`))) continue;
+      const call = ['usecase', component, name];
+      const route = /\b(GET|POST|PUT|PATCH|DELETE)\s+\/?([A-Za-z][\w/{}:-]*)/.exec(this.run.spec.pieces.find((p) => p.path === w.path)?.task ?? '') ?? single;
+      const controlled = this.run.spec.pieces.some((p) => p.kind === 'controller' && p.path.startsWith(`components/${component}/`));
+      if (this.run.platform === 'backend' && route && !controlled) call.push('--route', `${route[1]} ${route[2]}`);
+      await this.gen(stage, call);
+    }
   }
 
   // plan: the pieces
@@ -924,6 +1037,22 @@ export class LoopEngine extends EventEmitter {
   private async planStage(): Promise<boolean> {
     const stage = this.stage('plan');
     if (this.kept(stage, 'planner') && this.run.spec.pieces.length) return true;
+    const tooled = this.run.analysis?.pieces ?? [];
+    if (!this.run.spec.pieces.length && tooled.length) {
+      // the strategy's pieces are files the project already has (the ones that declare what changes, or every file
+      // of a rename, each already written by the tool): no model splits anything
+      const s = this.step(stage, 'Pieces from the analysis', 'shell');
+      s.log = tooled.map((p) => `${p.path} | ${p.code !== undefined ? 'written by a tool' : p.task}`).join('\n');
+      this.run.spec.pieces = tooled;
+      this.end(s, 'passed', `${tooled.length} files${tooled.every((p) => p.code !== undefined) ? ', each already written by a tool' : ''}`);
+      return true;
+    }
+    if (!this.run.spec.pieces.length && this.run.analysis && this.run.analysis.source !== 'plan') {
+      // the pieces of this kind of request are files the project has, and the request named none: nothing is planned
+      // (a bug's file is the one its failure names)
+      this.end(this.step(stage, 'Nothing to plan', 'shell'), 'skipped', `${this.run.analysis.strategy.replace(/^strategy:/, '')} plans no new file`);
+      return true;
+    }
     if (this.run.spec.pieces.length) {
       const s = this.step(stage, 'Pieces from the spec', 'you');
       s.log = this.run.spec.pieces.map((p) => `${p.path} | ${p.kind} | ${p.task}`).join('\n');
@@ -950,7 +1079,9 @@ export class LoopEngine extends EventEmitter {
     s.log = String(r.data.raw ?? '');
     this.run.spec.pieces = this.withoutGenerated((r.data.pieces ?? []) as Piece[]);
     const done = this.run.spec.pieces.length > 0 || this.generated().length > 0;
-    this.end(s, done ? 'passed' : 'failed', `${this.run.spec.pieces.length} pieces${this.generated().length ? ` (besides ${this.generated().length} generated files)` : ''}`);
+    // what the planner found beyond the platform or the local agents is said where the user reads first
+    const limits = ((r.data.limits ?? []) as string[]).length;
+    this.end(s, done ? 'passed' : 'failed', `${this.run.spec.pieces.length} pieces${this.generated().length ? ` (besides ${this.generated().length} generated files)` : ''}${limits ? ` · ${limits} thing(s) beyond the platform or the local agents: read this step` : ''}`);
     return done;
   }
 
@@ -974,6 +1105,14 @@ export class LoopEngine extends EventEmitter {
     for (const piece of this.run.spec.pieces) {
       if (this.stopped) return false;
       if (this.kept(stage, 'coder', piece.path) && fs.existsSync(path.join(this.run.root, piece.path))) continue; // written before the retry
+      if (piece.code !== undefined) {
+        const s = this.step(stage, piece.path, 'shell', { file: piece.path, input: piece.task });
+        s.code = piece.code;
+        this.writeFile(piece.path, piece.code, s);
+        this.written.push({ path: piece.path, code: piece.code, kind: piece.kind });
+        this.end(s, 'passed', 'written by a tool');
+        continue;
+      }
       const target = path.join(this.run.root, piece.path);
       const existing = fs.existsSync(target) ? fs.readFileSync(target, 'utf8') : '';
       const s = this.step(stage, piece.path, 'coder', { file: piece.path, input: piece.task });
@@ -1005,6 +1144,7 @@ export class LoopEngine extends EventEmitter {
       this.writeFile(piece.path, s.code ?? '', s);
       this.written.push({ path: piece.path, code: s.code ?? '', kind: piece.kind });
     }
+    await this.wire(stage);
     if (await this.commands(stage, this.config.commands.check, true)) return true;
     return this.repairProject(stage);
   }
@@ -1075,6 +1215,12 @@ export class LoopEngine extends EventEmitter {
   private async testsFirstStage(): Promise<boolean> {
     const stage = this.stage('test');
     if (this.kept(stage, 'tester')) return true;
+    if (!this.run.spec.pieces.length && this.generated().length) {
+      // every file of the run was generated: the generators write the tests of what they generate (and none for a
+      // backend resource that reads another API: a local model would test against the real one)
+      this.end(this.step(stage, 'Nothing left to test first', 'tester'), 'skipped', 'every file of this run was generated: the generators wrote its tests, and the verification runs them');
+      return true;
+    }
     const file = this.testFile();
     const name = pascal(slug(this.run.spec.title).replace(/-/g, '_'));
     const task = `Tests ${name}: one @test per acceptance criterion, before the code exists.\n${this.run.spec.criteria.map((c) => `- ${c}`).join('\n')}\n\n${this.testNames()}`;
@@ -1116,10 +1262,18 @@ export class LoopEngine extends EventEmitter {
       const failed = [...stage.steps].reverse().find((x) => x.actor === 'shell' && x.status === 'skipped');
       const told = await this.explain(failed?.log ?? '');
       if (failed) failed.agent = told.text;
-      const files = told.files.filter((f) => this.written.some((w) => w.path === f));
+      // a bug is in a file the project already has: the failure names it, whoever wrote it. Its test is never the
+      // file to repair: a test is not rewritten to pass
+      const fixing = this.run.analysis?.mode === 'fix';
+      const files = told.files.filter((f) => (fixing ? !f.startsWith('test/') : this.written.some((w) => w.path === f)));
+      if (fixing && !files.length && !this.written.some((w) => w.kind !== 'tests')) {
+        this.end(this.step(stage, 'Where is the cause?', 'shell'), 'failed', 'the failure names no file of the code, only the test: a test is not rewritten to pass. Name the declaration in the spec, or let a lead find the cause');
+        break;
+      }
       // no frame in a file of the run: every piece the failure names, else every piece
-      const targets = files.length ? files : this.written.filter((w) => told.text.includes(path.basename(w.path, '.nuc'))).map((w) => w.path);
-      for (const file of targets.length ? targets : this.written.map((w) => w.path)) {
+      const mine = this.written.filter((w) => !fixing || w.kind !== 'tests');
+      const targets = files.length ? files : mine.filter((w) => told.text.includes(path.basename(w.path, '.nuc'))).map((w) => w.path);
+      for (const file of targets.length ? targets : mine.map((w) => w.path)) {
         await this.repairWith(stage, file, `The project's tests fail (round ${round}). Fix this file so they pass; the tests say what the code must do (change a test only if it contradicts the spec).\n\n${told.text}`);
       }
     }
@@ -1290,7 +1444,9 @@ export class LoopEngine extends EventEmitter {
 
   /** A call to the local agents. A failure that may pass (the server not up yet, busy, a 5xx) is retried with
    * `backoff` up to `config.retry.attempts` tries in all; each retry is written in the step's trace. */
-  private async developer(route: string, body: unknown, step?: Step): Promise<{ ok: true; data: Record<string, any> } | { ok: false; error: string }> {
+  private async developer(route: string, input: Record<string, unknown>, step?: Step): Promise<{ ok: true; data: Record<string, any> } | { ok: false; error: string }> {
+    // every agent gets the project's folder: with it, it reads by itself the files that declare the names of its task
+    const body = { root: this.run.root, ...input };
     const policy = { ...DEFAULT_RETRY, ...this.config.retry };
     let error = '';
     for (let n = 1; ; n++) {

@@ -84,7 +84,7 @@ async function ask(root: string, id: string, text: string): Promise<void> {
   }
   // the question was just added: the history is what came before it
   const history = historyOf((loadSession(root, id)?.messages ?? []).slice(0, -1));
-  const body = JSON.stringify({ message: text, platform: card?.platform ?? 'backend', map: mapOf(root).slice(0, MAP_LIMIT), history });
+  const body = JSON.stringify({ message: text, platform: card?.platform ?? 'backend', map: mapOf(root).slice(0, MAP_LIMIT), history, root });
   try {
     let data: { report?: string; trace?: { step: string; detail: string }[]; detail?: unknown } = {};
     for (let n = 1; ; n++) {

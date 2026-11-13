@@ -1,0 +1,128 @@
+{
+  "requirements": [
+    {
+      "id": "nuclearlang",
+      "title": "NuclearLang",
+      "why": "the compiler, the dragonfly command and the code of the AI services",
+      "command": "dragonfly",
+      "url": "https://nuclearlang.github.io/",
+      "install": {
+        "linux": "curl -fsSL https://nuclearlang.github.io/install.sh | sh -s -- --no-ai",
+        "darwin": "curl -fsSL https://nuclearlang.github.io/install.sh | sh -s -- --no-ai",
+        "win32": "powershell -ExecutionPolicy ByPass -c \"irm https://nuclearlang.github.io/install.ps1 | iex\""
+      }
+    },
+    {
+      "id": "uv",
+      "title": "uv",
+      "why": "makes the Python environments of the services and brings its own Python; it goes in your user folder",
+      "command": "uv",
+      "url": "https://docs.astral.sh/uv/getting-started/installation/",
+      "install": {
+        "linux": "curl -LsSf https://astral.sh/uv/install.sh | sh",
+        "darwin": "curl -LsSf https://astral.sh/uv/install.sh | sh",
+        "win32": "powershell -ExecutionPolicy ByPass -c \"irm https://astral.sh/uv/install.ps1 | iex\""
+      }
+    },
+    {
+      "id": "ollama",
+      "title": "Ollama",
+      "why": "runs the local models and keeps them: it loads one when an agent asks and frees its memory afterwards",
+      "command": "ollama",
+      "url": "https://ollama.com/download",
+      "local": true,
+      "install": {
+        "linux": "curl -fsSL https://ollama.com/install.sh | sh",
+        "darwin": "brew install ollama && brew services start ollama",
+        "win32": "winget install --id Ollama.Ollama -e"
+      },
+      "note": {
+        "linux": "Ollama's own installer: it asks for your password, because it installs Ollama as a service of the system.",
+        "darwin": "With Homebrew; without it, download the app from Ollama's page and open it once."
+      }
+    }
+  ],
+  "embeddings": "embeddinggemma",
+  "profiles": [
+    {
+      "id": "remote",
+      "title": "Remote agents only",
+      "summary": "Nothing runs on this machine. Claude Code, Codex, Cursor or OpenCode get the Nuclear MCP server: the generators, the compiler and the command line.",
+      "gb": 0,
+      "ram": 0,
+      "minRam": 0,
+      "works": [
+        "the generators (a resource, a use case, a screen) from your agent",
+        "the compiler's checks and fixes, the documentation of every kind and decorator",
+        "dragonfly build, test and migrate from your agent"
+      ],
+      "limits": [
+        "your agent writes every line the generators do not: all of it is paid tokens",
+        "no Smart Graph: no strategy for a request, no search of the knowledge base",
+        "no Loop panel and no Nuclear agent chat in the editor"
+      ],
+      "measured": "nothing runs on this machine"
+    },
+    {
+      "id": "lite",
+      "title": "Lite",
+      "summary": "One 1.5B model does everything: for a machine with little memory.",
+      "coder": "qwen2.5-coder:1.5b",
+      "assistant": "qwen2.5-coder:1.5b",
+      "gb": 1.6,
+      "ram": 8,
+      "minRam": 4,
+      "works": [
+        "the Smart Graph: the strategy of each request and the knowledge base, for the local agents and for your remote agent",
+        "the generators and the compiler's fixes, which need no model"
+      ],
+      "limits": [
+        "not measured yet: its model is half the size of the coder the project measures, so expect it to miss more and your remote agent to correct more",
+        "plans, reviews and chat answers come from a small model made for code"
+      ],
+      "measured": "not measured yet"
+    },
+    {
+      "id": "medium",
+      "title": "Medium",
+      "summary": "The coder the project measures does everything, also the plans and the reviews: one 3B model in memory.",
+      "coder": "qwen2.5-coder:3b",
+      "assistant": "qwen2.5-coder:3b",
+      "gb": 2.5,
+      "ram": 12,
+      "minRam": 8,
+      "works": [
+        "the Smart Graph: the strategy of each request and the knowledge base, for the local agents and for your remote agent",
+        "the generators and the compiler's fixes, which need no model",
+        "a file is written as in hard: 43 of 45 single-file tasks (Claude Sonnet: 39), 16 of 18 never seen before"
+      ],
+      "limits": [
+        "plans, reviews and chat answers come from a model made for code: 6 of the first 8 chat questions as required, where hard answers 10 of 10",
+        "some answers are slow: one chat question had not ended after five minutes",
+        "turning a request in plain words into generator calls is not measured yet with this model"
+      ],
+      "measured": "as coder, the model of hard: 43 of 45 single-file tasks, 16 of 18 never seen; as assistant, 6 of the first 8 chat questions (hard: 10 of 10)"
+    },
+    {
+      "id": "hard",
+      "title": "Hard",
+      "summary": "The set every measurement of the project was made with: a coder and a separate model to plan, review and answer.",
+      "coder": "qwen2.5-coder:3b",
+      "assistant": "gemma4:e2b",
+      "gb": 9.7,
+      "ram": 24,
+      "minRam": 16,
+      "works": [
+        "the Smart Graph: the strategy of each request and the knowledge base, for the local agents and for your remote agent",
+        "the generators and the compiler's fixes, which need no model",
+        "43 of 45 single-file tasks (Claude Sonnet: 39), 16 of 18 never seen before",
+        "the assistant answers 10 of 10 questions about NuclearLang as required, and reads 10 of 11 requests right"
+      ],
+      "limits": [
+        "its assistant model takes 7.2 GB: with 16 GB of memory little else stays open",
+        "a whole feature of several files passes 2 times of 3: your remote agent validates and corrects"
+      ],
+      "measured": "43 of 45 single-file tasks (Claude Sonnet: 39), 16 of 18 never seen, 2 of 3 whole features, 10 of 10 chat questions, 10 of 11 analyses"
+    }
+  ]
+}
