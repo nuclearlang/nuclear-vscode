@@ -1,7 +1,9 @@
 // nuclear-loop: the Loop engine (loopEngine.ts) from a terminal or a CI job, without VS Code (ADR-0102).
 //
 //   nuclear-loop run [specs/<id>/spec.md] [--lead local|claude] the whole pipeline (no file: the newest spec)
-//   nuclear-loop retry <run> [--from <stage>]                  a failed run again from the step that failed
+//   nuclear-loop retry <run> [--from <stage> | --step <id>]    a run again from the step that failed, a whole stage,
+//                                                                or any step of it (passed or failed)
+//   nuclear-loop restart <run>                                   the whole pipeline again from scratch
 //   nuclear-loop ci [stage...]                                   the deterministic stages of .nuclear/loop.json
 //   nuclear-loop export github|gitlab|bitbucket                  writes the CI file of .nuclear/loop.json
 //   nuclear-loop runs                                            the runs of this project
@@ -19,10 +21,14 @@ const USAGE = `nuclear-loop — the Nuclear Loop without the editor
   nuclear-loop run [spec.md] [--lead local|claude]   spec → generate → plan → tests → code → verify → security →
                                                      artifacts → deploy
                                                      (no file: the spec of specs/ changed last)
-  nuclear-loop retry <run> [--from <stage>]          a failed run again from the step that failed (the steps that
-                                                     passed are kept); --from restarts that whole stage;
-                                                     calls to the local agents already retry by themselves with
-                                                     exponential backoff (.nuclear/loop.json "retry")
+  nuclear-loop retry <run> [--from <stage> | --step <id>]
+                                                     a run again from the step that failed (the steps that passed are
+                                                     kept); --from runs that whole stage again; --step runs that step
+                                                     (\`code-3\`: passed or failed) and every step after it. What the
+                                                     steps left out wrote is undone first. Calls to the local agents
+                                                     already retry by themselves (.nuclear/loop.json "retry")
+  nuclear-loop restart <run>                         the whole pipeline again from the specification: every file the
+                                                     run wrote goes back to what it was, then every stage runs
   nuclear-loop ci [check|test|security|artifacts|deploy ...]   the commands of .nuclear/loop.json (all by default)
   nuclear-loop export github|gitlab|bitbucket        writes the CI file that runs \`nuclear-loop ci\`
   nuclear-loop runs                                  the runs kept in .nuclear/loop/runs
@@ -185,7 +191,9 @@ async function run(root: string, specFile: string, lead?: string): Promise<numbe
   return drive(new LoopEngine(newRun(root, c, spec), readConfig(root, c.platform ?? '')));
 }
 
-async function retry(root: string, id: string, from?: string): Promise<number> {
+/** `step`: a step's id (that step and all after it), `true` the step that failed, `false` the whole stage `from`;
+ * `scratch`: the whole pipeline. */
+async function retry(root: string, id: string, from?: string, step?: string, scratch = false): Promise<number> {
   const old = listRuns(root).find((r) => r.id === id);
   if (!old) {
     console.error(`no run '${id}' (nuclear-loop runs)`);
@@ -195,11 +203,16 @@ async function retry(root: string, id: string, from?: string): Promise<number> {
     console.error(`unknown stage '${from}' (${old.stages.map((s) => s.id).join(', ')})`);
     return 2;
   }
-  return drive(new LoopEngine(old, readConfig(root, old.platform)), from as StageId | undefined, !from);
+  if (step && !old.stages.some((s) => s.steps.some((x) => x.id === step))) {
+    console.error(`unknown step '${step}' (${old.stages.flatMap((s) => s.steps.map((x) => x.id)).join(', ')})`);
+    return 2;
+  }
+  const engine = new LoopEngine(old, readConfig(root, old.platform));
+  return drive(engine, () => (scratch ? engine.restart() : engine.start(from as StageId | undefined, step ?? !from)));
 }
 
 /** One line per step when it ends; the run itself is kept in .nuclear/loop/runs/<id>.json and its journal <id>.md. */
-async function drive(engine: LoopEngine, from?: StageId, step = false): Promise<number> {
+async function drive(engine: LoopEngine, go: () => Promise<Run> = () => engine.start()): Promise<number> {
   const shown = new Set<string>();
   engine.on('change', (r: Run) => {
     for (const stage of r.stages) {
@@ -211,7 +224,7 @@ async function drive(engine: LoopEngine, from?: StageId, step = false): Promise<
     }
   });
   process.on('SIGINT', () => engine.stop());
-  const done = await engine.start(from, step);
+  const done = await go();
   if (done.diagnosis) console.log(`\nWhy it failed (local diagnoser):\n${done.diagnosis}\n\nRetry: nuclear-loop retry ${done.id}`);
   console.log(`\n${MARK[done.status]} ${done.status}${done.costUsd ? ` · Claude USD ${done.costUsd.toFixed(2)}` : ''} · .nuclear/loop/runs/${done.id}.md`);
   return done.status === 'passed' ? 0 : 1;
@@ -249,10 +262,12 @@ async function main(argv: string[]): Promise<number> {
       }
       return run(root, file, rest.includes('--lead') ? lead : undefined);
     }
-    case 'retry': {
-      const id = rest.find((a, i) => !a.startsWith('--') && rest[i - 1] !== '--from');
+    case 'retry':
+    case 'restart': {
+      const id = rest.find((a, i) => !a.startsWith('--') && rest[i - 1] !== '--from' && rest[i - 1] !== '--step');
       if (!id) break;
-      return retry(root, id, rest.includes('--from') ? rest[rest.indexOf('--from') + 1] : undefined);
+      const flag = (name: string) => (rest.includes(name) ? rest[rest.indexOf(name) + 1] : undefined);
+      return retry(root, id, flag('--from'), flag('--step'), cmd === 'restart');
     }
     case 'ci':
       return ci(root, rest);

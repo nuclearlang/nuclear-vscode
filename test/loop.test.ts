@@ -7,7 +7,7 @@ import * as path from 'node:path';
 import { test } from 'node:test';
 import { askedOf, historyOf, templatesOf, tokensOf } from '../src/chat';
 import { billionsOf, MAX_BILLIONS } from '../src/localModels';
-import { backoff, DEFAULT_RETRY, defaultConfig, journalMarkdown, LoopEngine, newRun, nucFiles, parseSpecMarkdown, recoverRun, retryAfter, specMarkdown, specResources, toolEnv, transientStatus } from '../src/loopEngine';
+import { backoff, DEFAULT_RETRY, defaultConfig, ENGINE, journalMarkdown, LoopEngine, newRun, nucFiles, parseSpecMarkdown, recoverRun, retryAfter, Run, specMarkdown, specResources, toolEnv, transientStatus, upgradeRun } from '../src/loopEngine';
 import { checkConnections, readTrace } from '../src/loopSafety';
 
 test('backoff grows exponentially, is capped and jittered, and honours Retry-After', () => {
@@ -227,7 +227,9 @@ test('when the generators wrote every file, nothing is asked of the local tester
   assert.equal(passed, true);
   const s = run.stages.find((x) => x.id === 'test')!.steps[0];
   assert.equal(s.status, 'skipped');
-  assert.match(s.summary, /every file of this run was generated/);
+  // it says what is true of the tests: here the generators wrote none
+  assert.match(s.summary, /every file was generated and none is a test/);
+  assert.match(s.decisions![0].why, /the generators wrote no test/);
   assert.equal(dev.calls.filter((c) => c === '/developer/test').length, 0);
 });
 
@@ -313,4 +315,102 @@ test('a spec may name its strategy, and its file keeps it', () => {
   assert.equal(parseSpecMarkdown(specMarkdown({ ...spec(), strategy: 'usecase' }), 'books').strategy, 'usecase');
   assert.match(specMarkdown({ ...spec(), strategy: 'usecase' }), /^- Use case: feature\n- Strategy: usecase\n/m);
   assert.equal(parseSpecMarkdown(specMarkdown(spec()), 'books').strategy, undefined);
+});
+
+/** A run whose every stage passed after its coder wrote a.nuc then b.nuc (both in the ledger), over fake services. */
+async function writtenRun(answer: object = { code: 'X\n  (n: int)\n', check: 'ok', attempts: 1, trace: [], report: '1 | met | a.nuc' }) {
+  const dev = await developer(0, answer);
+  const root = project();
+  const config = { ...defaultConfig('backend'), preflight: false, developerUrl: dev.url, retry: { attempts: 1, baseMs: 1, maxMs: 1 }, commands: { ...defaultConfig('backend').commands, check: ['true'], build: ['true'], test: ['true'], artifacts: [] } };
+  const run = newRun(root, { name: 'p', platform: 'backend', dialect: 'fastapi' }, { ...spec(), pieces: [{ path: 'a/a.nuc', kind: 'model', task: 'A' }, { path: 'a/b.nuc', kind: 'model', task: 'B' }] });
+  const done = await new LoopEngine(run, config).start();
+  return { dev, root, config, done };
+}
+
+test('any step is run again, passed or failed: the steps before it are kept, what the others wrote is undone first', async () => {
+  const { dev, root, config, done } = await writtenRun();
+  assert.equal(done.status, 'passed');
+  const code = done.stages.find((st) => st.id === 'code')!;
+  const second = code.steps.find((x) => x.file === 'a/b.nuc')!;
+  assert.equal(second.status, 'passed');
+  const before = dev.calls.filter((c) => c === '/developer/code').length;
+  const again = await new LoopEngine(done, config).start(undefined, second.id);
+  dev.close();
+  assert.equal(again.status, 'passed');
+  assert.equal(dev.calls.filter((c) => c === '/developer/code').length, before + 1); // b.nuc only: a.nuc is before it
+  assert.equal(again.previous?.at(-1)?.from, 'code');
+  assert.match(again.previous!.at(-1)!.why!, /from the step "a\/b.nuc"/);
+  assert.deepEqual(again.previous!.at(-1)!.undone, ['a/b.nuc']);
+  const ids = again.stages.find((st) => st.id === 'code')!.steps.map((x) => x.id);
+  assert.equal(new Set(ids).size, ids.length); // a kept step and a new one never share an id
+  assert.ok(fs.existsSync(path.join(root, 'a', 'b.nuc')));
+});
+
+test('a run again from scratch undoes every file it wrote, keeps one changed since, and runs every stage', async () => {
+  const { dev, root, config, done } = await writtenRun();
+  fs.writeFileSync(path.join(root, 'a', 'b.nuc'), 'changed by hand\n');
+  const spied: string[] = [];
+  const engine = new LoopEngine(done, config);
+  engine.once('change', () => spied.push(fs.existsSync(path.join(root, 'a', 'a.nuc')) ? 'a is still there' : 'a was undone'));
+  const again = await engine.restart();
+  dev.close();
+  assert.deepEqual(spied, ['a was undone']);
+  assert.equal(again.status, 'passed');
+  assert.equal(again.previous?.at(-1)?.from, 'spec');
+  assert.ok(again.previous!.at(-1)!.undone!.some((f) => f.startsWith('a/b.nuc (kept: changed since')));
+  assert.equal(again.stages.find((st) => st.id === 'spec')!.steps.filter((x) => x.title === 'Spec written').length, 1);
+  assert.match(journalMarkdown(again), /Retried from spec at .*from scratch/);
+});
+
+test('a run of an older engine has every stage of today, and any retry of it starts from scratch', async () => {
+  const { dev, root, config, done } = await writtenRun();
+  // as the engine before Generate and the analysis left it: no generate stage, no version, a plan a planner made
+  const old = JSON.parse(JSON.stringify(done)) as Run;
+  old.engine = undefined;
+  old.stages = old.stages.filter((st) => st.id !== 'generate');
+  old.stages.find((st) => st.id === 'plan')!.steps = [{ id: 'plan-1', title: 'The local planner splits the spec', actor: 'planner', status: 'passed', summary: '2 pieces', log: '', trace: [] }];
+  old.spec.pieces = old.spec.pieces.map(({ by: _by, ...p }) => p);
+  old.stages.find((st) => st.id === 'code')!.status = 'failed';
+  old.status = 'failed';
+  // its ledger lost the first write of a.nuc: it says the file "was" what an earlier attempt of the run wrote
+  old.writes = old.writes!.map((w) => (w.path === 'a/a.nuc' ? { ...w, before: 'X\n  (n: int)\n' } : w));
+  upgradeRun(old);
+  assert.deepEqual(old.stages.map((st) => st.id), ['spec', 'generate', 'plan', 'test', 'code', 'verify', 'security', 'artifacts', 'deploy']);
+  assert.ok(old.spec.pieces.every((p) => p.by === 'planner'));
+  const again = await new LoopEngine(old, config).start(undefined, true);
+  dev.close();
+  assert.equal(again.engine, ENGINE);
+  assert.equal(again.previous?.at(-1)?.from, 'spec');
+  assert.match(again.previous!.at(-1)!.why!, /older version of the Loop/);
+  assert.ok(!fs.existsSync(path.join(root, 'a', 'a.nuc'))); // the old plan's files are undone, and its pieces are not kept
+  assert.equal(again.stages.find((st) => st.id === 'generate')!.steps[0].title, 'Nothing to generate');
+});
+
+test('a plan made again is a new plan: the pieces a planner gave go, the ones written in the form stay', async () => {
+  const dev = await developer(0, { pieces: [{ path: 'a/new.nuc', kind: 'model', task: 'model New' }], raw: 'model | New', trace: [], code: 'X\n  (n: int)\n', check: 'ok', attempts: 1, report: '' });
+  const root = project();
+  const config = { ...defaultConfig('backend'), preflight: false, developerUrl: dev.url, retry: { attempts: 1, baseMs: 1, maxMs: 1 }, commands: { ...defaultConfig('backend').commands, check: ['true'], build: ['true'], test: ['true'], artifacts: [] } };
+  const run = newRun(root, { name: 'p', platform: 'backend', dialect: 'fastapi' }, spec());
+  run.spec.pieces = [{ path: 'a/old.nuc', kind: 'entity', task: 'entity Old', by: 'planner' }];
+  for (const st of run.stages) st.status = ['spec', 'generate', 'plan', 'test'].includes(st.id) ? 'passed' : st.id === 'code' ? 'failed' : 'skipped';
+  run.stages.find((st) => st.id === 'plan')!.steps.push({ id: 'plan-1', title: 'The local planner splits the spec', actor: 'planner', status: 'passed', summary: '1 pieces', log: '', trace: [] });
+  run.status = 'failed';
+  const done = await new LoopEngine(run, config).start('plan');
+  dev.close();
+  assert.deepEqual(done.spec.pieces.map((p) => `${p.path} by ${p.by}`), ['a/new.nuc by planner']);
+  assert.ok(dev.calls.includes('/developer/plan'));
+  const planner = done.stages.find((st) => st.id === 'plan')!.steps.find((x) => x.actor === 'planner')!;
+  assert.ok(planner.decisions!.some((d) => d.what === 'ask the local planner'));
+  assert.match(specMarkdown(done.spec), /^(?![\s\S]*## Pieces)/); // the spec file lists only what the user wrote
+});
+
+test('each acceptance criterion is held against the result: one not shown met is left for the reviewer, the run still passes', async () => {
+  const { dev, done } = await writtenRun({ code: 'X\n  (n: int)\n', check: 'ok', attempts: 1, trace: [], report: '1 | not met | no file of the run does it' });
+  dev.close();
+  assert.equal(done.status, 'passed');
+  assert.deepEqual(done.acceptance, [{ criterion: 'c', met: false, evidence: 'no file of the run does it' }]);
+  const s = done.stages.find((st) => st.id === 'verify')!.steps.find((x) => x.title === 'Acceptance criteria')!;
+  assert.equal(s.status, 'skipped');
+  assert.match(s.input!, /The run wrote 3 file\(s\)[\s\S]*They declare \d+ test/);
+  assert.match(journalMarkdown(done), /## Left for the reviewer[\s\S]*Acceptance criterion not shown met: c/);
 });

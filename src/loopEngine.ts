@@ -7,7 +7,7 @@
 import { ChildProcess, spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { readMachine } from './aiSetup';
-import { atomicWrite, BEAT_MS, checkConnections, ollamaBusy, orphaned, owner, Owner, rollback, trace, Write } from './loopSafety';
+import { atomicWrite, BEAT_MS, checkConnections, digest, ollamaBusy, orphaned, owner, Owner, rollback, trace, Write } from './loopSafety';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -23,6 +23,13 @@ export interface TraceItem {
   detail: string;
 }
 
+/** A choice made while a step ran and the reason for it: which strategy, which file is repaired, why a stage is left
+ * out. What the graph of a run shows when its node is opened. */
+export interface Decision {
+  what: string;
+  why: string;
+}
+
 export interface Step {
   id: string;
   title: string;
@@ -36,6 +43,8 @@ export interface Step {
   log: string;
   /** What a local agent did, step by step (recall, write, repair...). */
   trace: TraceItem[];
+  /** The choices the step made, each with its reason. */
+  decisions?: Decision[];
   /** The file a piece wrote and its code. */
   file?: string;
   /** The files a generator wrote or changed (the Generate stage). */
@@ -67,6 +76,9 @@ export interface Piece {
   task: string;
   /** The whole file, when a tool already wrote it (a rename): it is written as it is and no agent is asked. */
   code?: string;
+  /** Who gave the piece: `you` (written in the form: kept when the plan is made again), else a planner or the
+   * analysis (made again with the plan). */
+  by?: 'you' | 'planner' | 'claude' | 'analysis';
 }
 
 /** What the local analyst says of a spec before the run does anything (ADR-0105): which kind of request it is (its
@@ -131,8 +143,14 @@ export interface Run {
   analysis?: Analysis;
   /** Why the run failed, told by the local diagnoser (`/developer/diagnose`): kind, action and explanation. */
   diagnosis?: string;
-  /** The earlier attempts of a run retried from a stage: their stages as they ended. */
-  previous?: { at: number; from: StageId; status: Status; stages: Stage[] }[];
+  /** The earlier attempts of a run retried from a stage: their stages as they ended, and what was asked (`why`: from
+   * scratch, from a step, the whole stage) with the files that retry undid. */
+  previous?: { at: number; from: StageId; status: Status; stages: Stage[]; why?: string; undone?: string[] }[];
+  /** The version of the engine that made the run (`ENGINE`). A run of an older one lacks what was added since (a
+   * stage, the analysis): it is run again from the specification, never from its middle. */
+  engine?: number;
+  /** Each acceptance criterion at the end of the run: whether the result shows it met, and where. */
+  acceptance?: { criterion: string; met: boolean; evidence: string }[];
   /** The process running it and its last heartbeat (loopSafety.ts): a stale beat means the run was orphaned. */
   owner?: Owner;
   /** Every project file the run wrote, with what was there before: what a broken step wrote is undone. */
@@ -210,6 +228,9 @@ export const RUNS_DIR = path.join('.nuclear', 'loop', 'runs');
 export const ARTIFACTS_DIR = path.join('.nuclear', 'loop', 'artifacts');
 export const SPECS_DIR = 'specs';
 
+/** Raised when a stage, or what a run must do before it retries, changes: an older run starts again from scratch. */
+export const ENGINE = 2;
+
 const STAGES: Omit<Stage, 'status' | 'steps'>[] = [
   { id: 'spec', title: 'Specification', about: 'The spec you wrote or imported, with its acceptance criteria and the context the agents get, written to specs/<id>/spec.md. Then its analysis: which kind of request it is (a whole system, one screen, a rename, a failing test...) and the strategy the run follows: the stages that run, what the generators write, the facts it lacks.', actors: ['you', 'planner'] },
   { id: 'generate', title: 'Generate', about: 'dragonfly gen writes what follows from the data, already compiling: for each resource of the spec (its GET <url> lines, or its Resources) the models, the repository, a use case per action, the facade, the controller or the screen, the tests. The agents write only what is left.', actors: ['shell'] },
@@ -285,12 +306,31 @@ export function newRun(root: string, card: { name: string; platform: string | nu
     project: card.name,
     platform: card.platform ?? '',
     dialect: card.dialect,
-    spec,
+    // the pieces a spec brings were written by the user (the form, or the Pieces of its file)
+    spec: { ...spec, pieces: spec.pieces.map((p) => ({ ...p, by: p.by ?? 'you' })) },
     status: 'pending',
     created: Date.now(),
     stages: STAGES.map((s) => ({ ...s, status: 'pending', steps: [] })),
     costUsd: 0,
+    engine: ENGINE,
   };
+}
+
+/** A run as this engine reads it, whatever version wrote it: every stage of today in its place (one a newer engine
+ * added was never run: skipped), and each piece with who gave it (before `by`, a piece is the user's only when no
+ * planner ever made the plan). Changes nothing of a run this engine made. */
+export function upgradeRun(run: Run): Run {
+  if (run.engine === ENGINE) return run;
+  const ran = run.status !== 'pending';
+  run.stages = STAGES.map((s) => {
+    const old = run.stages.find((x) => x.id === s.id);
+    return old ? { ...old, title: s.title, about: s.about, actors: s.actors } : { ...s, status: ran ? 'skipped' : 'pending', steps: [] };
+  });
+  const plans = [run.stages, ...(run.previous ?? []).map((p) => p.stages)].flatMap((stages) => stages.find((st) => st.id === 'plan')?.steps ?? []);
+  const planned = plans.some((s) => s.actor === 'planner' || s.actor === 'claude' || s.title === 'Pieces from the analysis');
+  run.spec.pieces = run.spec.pieces.map((p) => ({ ...p, by: p.by ?? (planned ? 'planner' : 'you') }));
+  if (!ran) run.engine = ENGINE;
+  return run;
 }
 
 export function listRuns(root: string): Run[] {
@@ -301,7 +341,7 @@ export function listRuns(root: string): Run[] {
     .filter((f) => f.endsWith('.json'))
     .map((f) => {
       try {
-        return JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8')) as Run;
+        return upgradeRun(JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8')) as Run);
       } catch {
         return undefined;
       }
@@ -317,7 +357,9 @@ export function specMarkdown(spec: Spec): string {
   lines.push(...(spec.criteria.length ? spec.criteria.map((c) => `- [ ] ${c}`) : ['- (none yet)']));
   if (spec.context.length) lines.push('', '## Context', '', ...spec.context.map((c) => `- ${c}`));
   if (spec.resources?.length) lines.push('', '## Resources', '', ...spec.resources.map((r) => `- \`${r}\``));
-  if (spec.pieces.length) lines.push('', '## Pieces', '', ...spec.pieces.map((p) => `- \`${p.path}\` (${p.kind}): ${p.task}`));
+  // only the pieces the user wrote: the ones a planner gave are made again with the plan
+  const own = spec.pieces.filter((p) => !p.by || p.by === 'you');
+  if (own.length) lines.push('', '## Pieces', '', ...own.map((p) => `- \`${p.path}\` (${p.kind}): ${p.task}`));
   return lines.join('\n') + '\n';
 }
 
@@ -406,12 +448,14 @@ export function journalMarkdown(run: Run): string {
   ];
   if (run.notes) out.push('', '## What the local developer says', '', run.notes);
   if (run.diagnosis) out.push('', '## Why it failed (local diagnoser)', '', run.diagnosis);
-  for (const p of run.previous ?? []) out.push('', `- Retried from ${p.from} at ${when(p.at)} (the earlier attempt ${p.status}; kept in the run's .json)`);
+  for (const p of run.previous ?? []) out.push('', `- Retried from ${p.from} at ${when(p.at)}${p.why ? `: ${p.why}` : ''} (the earlier attempt ${p.status}; kept in the run's .json)${p.undone?.length ? `; undone: ${p.undone.join(', ')}` : ''}`);
   for (const i of run.interrupted ?? []) out.push('', `- Interrupted at ${i.stage}${i.step ? ` · ${i.step}` : ''} (${when(i.at)}): the process that ran it stopped; undone: ${i.undone.join(', ') || 'nothing'}; the trace log is ${RUNS_DIR}/${run.id}.log`);
   const files = run.stages.flatMap((st) => st.steps.filter((s) => s.file?.endsWith('.nuc') && s.code).map((s) => `- \`${s.file}\` (${s.actor}, ${s.status})`));
   if (files.length) out.push('', '## Files written', '', ...[...new Set(files)]);
   const open = run.stages.flatMap((st) => st.steps.filter((s) => s.status === 'failed').map((s) => `- ${st.title} · ${s.title}: ${s.summary}`));
-  if (open.length) out.push('', '## Left for the reviewer', '', ...open);
+  const unmet = (run.acceptance ?? []).filter((a) => !a.met).map((a) => `- Acceptance criterion not shown met: ${a.criterion} (${a.evidence})`);
+  if (open.length || unmet.length) out.push('', '## Left for the reviewer', '', ...open, ...unmet);
+  if (run.acceptance?.length) out.push('', '## Acceptance criteria', '', ...run.acceptance.map((a) => `- [${a.met ? 'x' : ' '}] ${a.criterion} — ${a.evidence}`));
   for (const st of run.stages) {
     out.push('', `## ${st.title} — ${st.status}`);
     for (const s of st.steps) {
@@ -420,6 +464,7 @@ export function journalMarkdown(run: Run): string {
       if (s.file) out.push(`File: \`${s.file}\``, '');
       if (s.tool) out.push(`Tool: \`${s.tool}\``, '');
       if (s.trace.length) out.push(...s.trace.map((t) => `1. **${t.step}**: ${t.detail.replace(/\s+/g, ' ').slice(0, 300)}`), '');
+      if (s.decisions?.length) out.push('Decisions:', '', ...s.decisions.map((d) => `- ${d.what} — because ${d.why}`), '');
       if (s.agent) out.push('What the agent read:', '', '```', clip(s.agent, 30), '```', '');
       if (s.log && s.status === 'failed') out.push('Log:', '', '```', clip(s.log, 40), '```', '');
     }
@@ -676,6 +721,7 @@ export class LoopEngine extends EventEmitter {
     readonly config: LoopConfig,
   ) {
     super();
+    upgradeRun(run);
   }
 
   stop(): void {
@@ -700,7 +746,7 @@ export class LoopEngine extends EventEmitter {
   private writeFile(rel: string, text: string, s: Step): void {
     const file = path.join(this.run.root, rel);
     const before = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : null;
-    (this.run.writes ??= []).push({ path: rel, step: s.id, before, at: Date.now() });
+    (this.run.writes ??= []).push({ path: rel, step: s.id, before, at: Date.now(), after: digest(text) });
     this.save(); // the ledger first: a crash after the write can still undo it
     atomicWrite(file, text);
     this.log('write', undefined, s, rel);
@@ -711,11 +757,19 @@ export class LoopEngine extends EventEmitter {
   }
 
   private step(stage: Stage, title: string, actor: Actor, extra: Partial<Step> = {}): Step {
-    const s: Step = { id: `${stage.id}-${stage.steps.length + 1}`, title, actor, status: 'running', started: Date.now(), summary: '', log: '', trace: [], ...extra };
+    // the number after the highest one of the stage: the steps kept from an earlier attempt keep theirs
+    const last = Math.max(0, ...stage.steps.map((x) => Number(x.id.split('-').pop()) || 0));
+    const s: Step = { id: `${stage.id}-${last + 1}`, title, actor, status: 'running', started: Date.now(), summary: '', log: '', trace: [], ...extra };
     stage.steps.push(s);
     this.save();
     this.log('step', stage, s, title);
     return s;
+  }
+
+  /** A choice of a step and its reason: kept with the step (the graph shows it) and in the trace log. */
+  private decide(s: Step, what: string, why: string): void {
+    (s.decisions ??= []).push({ what, why });
+    this.log('decision', undefined, s, `${what} — because ${why}`.slice(0, 300));
   }
 
   private end(s: Step, status: Status, summary: string): void {
@@ -726,34 +780,100 @@ export class LoopEngine extends EventEmitter {
     this.log(status, undefined, s, summary.slice(0, 200));
   }
 
-  /** Runs the pipeline. A failed run is retried from `from` (default: the first stage that failed): the stages before
-   * it are kept as they passed and the earlier attempt is kept in `previous`. With `step`, the retry goes on from the
-   * step that failed: the steps of that stage that passed are kept too (the pieces already written, the reviews
-   * done), so only what failed runs again. */
-  async start(from?: StageId, step = false): Promise<Run> {
-    // one process at a time: a run another window is running (its heartbeat is fresh) is not started twice
+  /** Runs the pipeline. A run that already ran is run again from `from` (default: the first stage that failed): the
+   * stages before it are kept as they ended and the earlier attempt is kept in `previous`. `step` says how much of
+   * that stage is kept: `false` nothing (the whole stage again), `true` every step that passed (it goes on from the
+   * one that failed), a step's id every step before that one (that step and all after it run again, whether it had
+   * passed or failed). What the steps left out wrote is undone first, so a retry never builds on a broken attempt.
+   * A run made by an older engine lacks what was added since: it starts again from scratch (`restart`). */
+  async start(from?: StageId, step: boolean | string = false): Promise<Run> {
+    this.guard();
+    if (this.run.status !== 'pending' && this.run.engine !== ENGINE) return this.restart('this run was made by an older version of the Loop, which had no analysis of the request and no Generate stage: it runs again from the specification');
+    const ids = this.run.stages.map((st) => st.id);
+    const owning = typeof step === 'string' ? this.run.stages.find((st) => st.steps.some((x) => x.id === step))?.id : undefined;
+    const first = owning ?? from ?? this.run.stages.find((st) => st.status === 'failed')?.id;
+    const resume = first && this.run.stages.some((st) => st.status !== 'pending') ? ids.indexOf(first) : -1;
+    if (resume >= 0) {
+      const earlier = structuredClone(this.run.stages.slice(resume));
+      const dropped: Step[] = [];
+      for (const [i, st] of this.run.stages.slice(resume).entries()) {
+        const at = typeof step === 'string' ? st.steps.findIndex((x) => x.id === step) : -1;
+        // the check of the connections is made again by every attempt: the old one is not kept
+        const keep = i > 0 || step === false ? [] : st.steps.filter((x, n) => x.status === 'passed' && x.title !== 'Check the connections' && (at < 0 || n < at));
+        dropped.push(...st.steps.filter((x) => !keep.includes(x)));
+        Object.assign(st, { status: 'pending', steps: keep, started: undefined, ended: undefined });
+      }
+      const named = typeof step === 'string' ? earlier[0].steps.find((x) => x.id === step)?.title : undefined;
+      const why = named ? `from the step "${named}" (it and every step after it run again)` : step === true ? 'from the step that failed (the steps that passed are kept)' : `the whole stage ${first} again`;
+      this.forget(first!, earlier, why, this.undo(dropped));
+      // a plan made again is a new plan: only the pieces the user wrote stay
+      if (resume <= ids.indexOf('plan') && !this.planKept()) this.run.spec.pieces = this.run.spec.pieces.filter((p) => p.by === 'you');
+      this.restoreWritten();
+    }
+    return this.go(ids, resume, resume >= 0 ? `from ${first}: ${this.run.previous!.at(-1)!.why}` : this.run.spec.title);
+  }
+
+  /** The whole pipeline again from the specification: every file the run wrote goes back to what it was, the analysis
+   * and the plan are made again, and the earlier attempt is kept in `previous`. `why` is told in the journal. */
+  async restart(why = 'from scratch: every stage again, what the run wrote undone first'): Promise<Run> {
+    this.guard();
+    upgradeRun(this.run);
+    const earlier = structuredClone(this.run.stages);
+    const undone = this.undo(this.run.stages.flatMap((st) => st.steps), true);
+    this.run.stages = STAGES.map((s) => ({ ...s, status: 'pending', steps: [] }));
+    this.forget('spec', earlier, why, undone);
+    this.run.spec.pieces = this.run.spec.pieces.filter((p) => p.by === 'you');
+    this.run.analysis = undefined;
+    this.run.acceptance = undefined;
+    this.run.engine = ENGINE;
+    this.written = [];
+    return this.go(this.run.stages.map((st) => st.id), -1, why);
+  }
+
+  /** One process at a time: a run another window is running (its heartbeat is fresh) is not started twice. An
+   * orphaned one is recovered first: what it left half done is undone. */
+  private guard(): void {
     if (this.run.status === 'running' && this.run.owner && this.run.owner.pid !== process.pid && !orphaned(this.run.owner)) {
       throw new Error(`the run '${this.run.id}' is running in another process (pid ${this.run.owner.pid}); stop it there first`);
     }
-    if (this.run.status === 'running') recoverRun(this.run); // orphaned: undo what it left half done, then go on
-    const ids = this.run.stages.map((st) => st.id);
-    const first = from ?? this.run.stages.find((st) => st.status === 'failed')?.id;
-    const resume = first && this.run.stages.some((st) => st.status !== 'pending') ? ids.indexOf(first) : -1;
-    if (resume >= 0) {
-      this.run.previous = [...(this.run.previous ?? []), { at: Date.now(), from: first!, status: this.run.status, stages: structuredClone(this.run.stages.slice(resume)) }];
-      for (const [i, st] of this.run.stages.slice(resume).entries()) {
-        const keep = step && i === 0 ? st.steps.filter((x) => x.status === 'passed') : [];
-        Object.assign(st, { status: 'pending', steps: keep, started: undefined, ended: undefined });
-      }
-      this.run.notes = undefined;
-      this.run.diagnosis = undefined;
-      this.run.ended = undefined;
-      this.restoreWritten();
-    }
+    if (this.run.status === 'running') recoverRun(this.run);
+  }
+
+  /** Undoes what `steps` wrote (every write of the run with `all`): each file goes back to what it was before, unless
+   * someone changed it since. Returns the files undone; the ledger keeps only the writes that stay. */
+  private undo(steps: Step[], all = false): string[] {
+    const gone = new Set(steps.map((x) => x.id));
+    const since = Math.min(...steps.map((x) => x.started ?? Infinity));
+    // before step ids were unique, a kept step could share its id with one left out: the time of the write decides
+    const out = (w: Write) => all || (gone.has(w.step) && w.at >= since);
+    const changed: string[] = [];
+    // the ledger of an older engine lost its first writes: what it says a file "was" can be what an earlier attempt
+    // of this same run wrote. From scratch that is not what was there before the run: the file goes (its text stays
+    // in that attempt's step)
+    const own = new Set(
+      all && this.run.engine !== ENGINE
+        ? [this.run.stages, ...(this.run.previous ?? []).map((p) => p.stages)].flat().flatMap((st) => st.steps.map((x) => (x.code ?? '').trim())).filter(Boolean)
+        : [],
+    );
+    const writes = (this.run.writes ?? []).filter(out).map((w) => (w.before !== null && own.has(w.before.trim()) ? { ...w, before: null } : w));
+    const undone = rollback(this.run.root, writes, () => false, changed);
+    this.run.writes = (this.run.writes ?? []).filter((w) => !out(w));
+    return [...undone, ...changed.map((f) => `${f} (kept: changed since the run wrote it)`)];
+  }
+
+  /** The attempt that ends here goes to `previous`, with what the new one was asked and what was undone. */
+  private forget(from: StageId, stages: Stage[], why: string, undone: string[]): void {
+    this.run.previous = [...(this.run.previous ?? []), { at: Date.now(), from, status: this.run.status, stages, why, undone }];
+    this.run.notes = undefined;
+    this.run.diagnosis = undefined;
+    this.run.ended = undefined;
+  }
+
+  private async go(ids: StageId[], resume: number, detail: string): Promise<Run> {
     this.run.status = 'running';
     this.run.owner = owner();
     this.save();
-    this.log(resume >= 0 ? 'resume' : 'start', undefined, undefined, resume >= 0 ? `from ${first}${step ? ' (the failed step)' : ''}` : this.run.spec.title);
+    this.log(resume >= 0 ? 'resume' : 'start', undefined, undefined, detail);
     // the heartbeat: a run whose owner stops beating is orphaned (the editor was closed), and is resumed later
     const beat = setInterval(() => {
       this.run.owner = owner();
@@ -792,7 +912,9 @@ export class LoopEngine extends EventEmitter {
       // no tests first
       const wanted = this.run.analysis?.stages ?? [];
       if (id !== 'spec' && wanted.length && !wanted.includes(id)) {
-        this.end(this.step(stage, 'Not part of this kind of request', 'shell'), 'skipped', `${this.run.analysis!.strategy.replace(/^strategy:/, '')} runs ${wanted.join(', ')}`);
+        const out = this.step(stage, 'Not part of this kind of request', 'shell');
+        this.decide(out, `leave ${stage.title} out`, `the strategy ${this.run.analysis!.strategy.replace(/^strategy:/, '')} runs only ${wanted.join(', ')}`);
+        this.end(out, 'skipped', `${this.run.analysis!.strategy.replace(/^strategy:/, '')} runs ${wanted.join(', ')}`);
         stage.status = 'skipped';
         this.save();
         continue;
@@ -852,6 +974,11 @@ export class LoopEngine extends EventEmitter {
     return stage.steps.find((x) => x.status === 'passed' && x.actor === actor && (file === undefined || x.file === file));
   }
 
+  /** Whether the plan of the earlier attempt stays (its step passed and was kept): its pieces are then not made again. */
+  private planKept(): boolean {
+    return this.stage('plan').steps.some((x) => x.status === 'passed' && x.title !== 'Check the connections');
+  }
+
   /** After a retry: what the earlier attempt wrote, read back from the project (the files are the truth). */
   private restoreWritten(): void {
     this.written = [];
@@ -874,6 +1001,8 @@ export class LoopEngine extends EventEmitter {
     const absent = [...new Set([...failure.matchAll(/N0220 '([A-Z]\w*)'/g)].map((m) => m[1]))].filter((n) => !this.planned().includes(n));
     if (absent.length) failure = `${absent.join(', ')} is not in the plan (${this.planSummary()}): the plan does not cover the spec.\n\n${failure}`;
     const s = this.step(stage, 'Why it failed', 'diagnoser');
+    this.decide(s, `diagnose "${bad?.title ?? stage.title}"`, 'it is the last step of the stage that failed');
+    if (absent.length) this.decide(s, 'blame the plan, not the code', `the compiler does not know ${absent.join(', ')} and no piece of the plan declares it`);
     const r = await this.developer('/developer/diagnose', { task: `${stage.title} · ${bad?.title ?? ''}`, platform: this.run.platform, path: this.run.root, context: failure.slice(-8000) || 'no output' }, s);
     s.trace = r.ok ? [...s.trace, ...(r.data.trace ?? [])] : s.trace;
     s.log = r.ok ? String(r.data.report ?? '') : r.error;
@@ -928,6 +1057,10 @@ export class LoopEngine extends EventEmitter {
     s.trace = r.data.trace ?? [];
     s.log = a.report;
     const name = a.strategy.replace(/^strategy:/, '');
+    this.decide(s, `follow the strategy ${name}: ${a.title.replace(/^Strategy: /, '')}`, this.run.spec.strategy ? 'the spec names it itself' : a.why || 'it is the closest in meaning to the request');
+    if (a.stages.length) this.decide(s, `run ${a.stages.filter((x) => x !== 'spec').join(' → ')}`, `it is what a request of this kind needs (mode: ${a.mode}; pieces from: ${a.source})`);
+    for (const t of s.trace.filter((x) => x.step === 'generator')) this.decide(s, t.detail.includes(': accepted') ? `generate with ${t.detail.replace(/: accepted$/, '')}` : `do not generate with ${t.detail.split(': ')[0]}`, t.detail.includes(': accepted') ? "the generator's dry run accepted it" : `its dry run refused it: ${t.detail.split(': ').slice(1).join(': ')}`);
+    for (const l of a.limits) this.decide(s, 'tell the user a limit', l);
     if (a.questions.length) {
       this.end(s, 'failed', `${name}: the request does not say: ${a.questions[0]}${a.questions.length > 1 ? ` (and ${a.questions.length - 1} more: read this step)` : ''}`);
       return false;
@@ -980,9 +1113,11 @@ export class LoopEngine extends EventEmitter {
       this.end(this.step(stage, 'Nothing to generate', 'shell'), 'skipped', 'the spec names no resource (a GET <url> line, a Resources section, or a thing with its fields in plain words)');
       return true;
     }
-    for (const call of calls) {
+    const said = specResources(this.run.spec, this.run.platform).length;
+    for (const [i, call] of calls.entries()) {
       if (this.stopped) return false;
-      if ((await this.gen(stage, call)) !== 0) return false;
+      const why = i >= said ? 'the analysis read this resource in the plain words of the request, and the dry run accepted it' : this.run.spec.resources?.length ? 'the spec lists it under Resources' : 'the spec has a `GET <url>` line for it: its fields come from the spec (its example answer, else its table)';
+      if ((await this.gen(stage, call, why)) !== 0) return false;
     }
     // the project map the planner and the tester read, with what was generated
     return this.commands(stage, ['nuclear check .'], false);
@@ -990,18 +1125,20 @@ export class LoopEngine extends EventEmitter {
 
   /** One `dragonfly gen` call as a step; answers its exit code. What it wrote goes to the ledger, so a crash or a
    * failed run undoes it like an agent's file. */
-  private async gen(stage: Stage, call: string[]): Promise<number> {
+  private async gen(stage: Stage, call: string[], why: string): Promise<number> {
     const command = ['dragonfly', 'gen', ...call].map((a) => (/^[\w./:,=-]+$/.test(a) ? a : `'${a.replace(/^"|"$/g, '').replace(/'/g, "'\\''")}'`)).join(' ');
     const before = nucFiles(this.run.root);
     const s = this.step(stage, command, 'shell', { input: command });
+    this.decide(s, `write ${call[0]} ${call.slice(1, 3).join(' ')} with the generator, not with a model`, why);
     const code = await shell(command, this.run.root, (d) => {
       s.log = (s.log + d).slice(-60000);
       this.emit('change', this.run);
     }, (p) => this.children.push(p), this.config.commandTimeoutMs);
     const after = nucFiles(this.run.root);
     const changed = [...after].filter(([f, text]) => before.get(f) !== text).map(([f]) => f);
-    for (const f of changed) (this.run.writes ??= []).push({ path: f, step: s.id, before: before.get(f) ?? null, at: Date.now() });
+    for (const f of changed) (this.run.writes ??= []).push({ path: f, step: s.id, before: before.get(f) ?? null, at: Date.now(), after: digest(after.get(f)!) });
     s.files = changed;
+    s.trace = changed.map((f) => ({ step: before.has(f) ? 'changed' : 'wrote', detail: f }));
     this.save();
     this.end(s, code === 0 ? 'passed' : 'failed', code === 0 ? `${changed.length} files` : `exit ${code}: ${lastLine(s.log)}`);
     return code;
@@ -1028,7 +1165,7 @@ export class LoopEngine extends EventEmitter {
       const route = /\b(GET|POST|PUT|PATCH|DELETE)\s+\/?([A-Za-z][\w/{}:-]*)/.exec(this.run.spec.pieces.find((p) => p.path === w.path)?.task ?? '') ?? single;
       const controlled = this.run.spec.pieces.some((p) => p.kind === 'controller' && p.path.startsWith(`components/${component}/`));
       if (this.run.platform === 'backend' && route && !controlled) call.push('--route', `${route[1]} ${route[2]}`);
-      await this.gen(stage, call);
+      await this.gen(stage, call, `the coder wrote the use case ${name} and the facade of ${component} has no alias for it${call.includes('--route') ? `; the spec gives its route ${route![1]} ${route![2]}` : ''}`);
     }
   }
 
@@ -1036,13 +1173,14 @@ export class LoopEngine extends EventEmitter {
 
   private async planStage(): Promise<boolean> {
     const stage = this.stage('plan');
-    if (this.kept(stage, 'planner') && this.run.spec.pieces.length) return true;
-    const tooled = this.run.analysis?.pieces ?? [];
+    if (this.planKept() && this.run.spec.pieces.length) return true;
+    const tooled = (this.run.analysis?.pieces ?? []).map((p) => ({ ...p, by: 'analysis' as const }));
     if (!this.run.spec.pieces.length && tooled.length) {
       // the strategy's pieces are files the project already has (the ones that declare what changes, or every file
       // of a rename, each already written by the tool): no model splits anything
       const s = this.step(stage, 'Pieces from the analysis', 'shell');
       s.log = tooled.map((p) => `${p.path} | ${p.code !== undefined ? 'written by a tool' : p.task}`).join('\n');
+      this.decide(s, 'take the pieces from the analysis, ask no planner', `the strategy ${this.run.analysis!.strategy.replace(/^strategy:/, '')} works on files the project already has (pieces from: ${this.run.analysis!.source})`);
       this.run.spec.pieces = tooled;
       this.end(s, 'passed', `${tooled.length} files${tooled.every((p) => p.code !== undefined) ? ', each already written by a tool' : ''}`);
       return true;
@@ -1050,12 +1188,15 @@ export class LoopEngine extends EventEmitter {
     if (!this.run.spec.pieces.length && this.run.analysis && this.run.analysis.source !== 'plan') {
       // the pieces of this kind of request are files the project has, and the request named none: nothing is planned
       // (a bug's file is the one its failure names)
-      this.end(this.step(stage, 'Nothing to plan', 'shell'), 'skipped', `${this.run.analysis.strategy.replace(/^strategy:/, '')} plans no new file`);
+      const none = this.step(stage, 'Nothing to plan', 'shell');
+      this.decide(none, 'plan nothing', `the strategy ${this.run.analysis.strategy.replace(/^strategy:/, '')} takes its files from the project (${this.run.analysis.source}) and the request named none`);
+      this.end(none, 'skipped', `${this.run.analysis.strategy.replace(/^strategy:/, '')} plans no new file`);
       return true;
     }
     if (this.run.spec.pieces.length) {
       const s = this.step(stage, 'Pieces from the spec', 'you');
       s.log = this.run.spec.pieces.map((p) => `${p.path} | ${p.kind} | ${p.task}`).join('\n');
+      this.decide(s, 'use the pieces of the spec, ask no planner', 'the spec brings its own pieces (written in the form or under Pieces)');
       this.end(s, 'passed', `${this.run.spec.pieces.length} pieces written in the form`);
       return true;
     }
@@ -1063,21 +1204,25 @@ export class LoopEngine extends EventEmitter {
       const s = this.step(stage, 'Claude splits the spec into pieces', 'claude');
       const prompt = `${this.specPrompt()}${this.generatedNote()}\n\n## Context\n\n${this.contextText()}\n\nThe project is \`${this.run.project}\` (platform ${this.run.platform}, dialect ${this.run.dialect}), in the current folder. First call graph_prompt("plan") and follow it; read the project's files you need. Then answer ONLY a JSON array of pieces: [{"path": "...", "kind": "...", "task": "..."}], each task complete enough for a junior who sees nothing else (names, signatures, the files it uses).`;
       const text = await this.claude(stage, s, prompt, ['Read', 'Glob', 'Grep', 'mcp__nuclear__graph_search', 'mcp__nuclear__graph_prompt', 'mcp__nuclear__nuclear_help', 'mcp__nuclear__nuclear_brief']);
-      const pieces = this.withoutGenerated(parsePieces(text));
+      const pieces = this.withoutGenerated(parsePieces(text).map((p) => ({ ...p, by: 'claude' as const })), s);
       this.run.spec.pieces = pieces;
       const done = pieces.length > 0 || this.generated().length > 0;
       this.end(s, done ? 'passed' : 'failed', pieces.length || done ? `${pieces.length} pieces` : 'no pieces in the answer');
       return done;
     }
     const s = this.step(stage, 'The local planner splits the spec', 'planner');
-    const r = await this.developer('/developer/plan', { spec: `${this.specPrompt()}${this.generatedNote()}\n\n${this.contextText().slice(0, 4000)}`, platform: this.run.platform });
+    this.decide(s, 'ask the local planner', 'the spec brings no pieces, the analysis gave none, and no frontier model leads this run');
+    // only the spec is split: the context files are instructions for the agents, and their words are not the request's
+    const r = await this.developer('/developer/plan', { spec: `${this.specPrompt()}${this.generatedNote()}`, platform: this.run.platform });
     if (!r.ok) {
       this.end(s, 'failed', r.error);
       return false;
     }
     s.trace = r.data.trace ?? [];
     s.log = String(r.data.raw ?? '');
-    this.run.spec.pieces = this.withoutGenerated((r.data.pieces ?? []) as Piece[]);
+    this.run.spec.pieces = this.withoutGenerated(((r.data.pieces ?? []) as Piece[]).map((p) => ({ ...p, by: 'planner' as const })), s);
+    for (const p of this.run.spec.pieces) this.decide(s, `plan ${p.kind} in ${p.path}`, p.task.split('\n')[0].slice(0, 200));
+    if (!this.run.spec.pieces.length && this.generated().length) this.decide(s, 'plan no piece', `the generators already wrote ${this.generated().length} files and the planner named nothing else to build`);
     const done = this.run.spec.pieces.length > 0 || this.generated().length > 0;
     // what the planner found beyond the platform or the local agents is said where the user reads first
     const limits = ((r.data.limits ?? []) as string[]).length;
@@ -1092,10 +1237,12 @@ export class LoopEngine extends EventEmitter {
   }
 
   /** A planned piece the generators already wrote (the same file, or the same declaration elsewhere) is dropped. */
-  private withoutGenerated(pieces: Piece[]): Piece[] {
+  private withoutGenerated(pieces: Piece[], s: Step): Piece[] {
     const files = this.generated();
     const stems = new Set(files.map((f) => path.basename(f, '.nuc')));
-    return pieces.filter((p) => !files.includes(p.path) && !stems.has(path.basename(p.path, '.nuc')));
+    const done = (p: Piece) => files.includes(p.path) || stems.has(path.basename(p.path, '.nuc'));
+    for (const p of pieces.filter(done)) this.decide(s, `drop the planned piece ${p.path}`, 'a generator already wrote that file in this run');
+    return pieces.filter((p) => !done(p));
   }
 
   // code: each piece by the local coder, Claude for what it cannot, then the project's check
@@ -1107,6 +1254,7 @@ export class LoopEngine extends EventEmitter {
       if (this.kept(stage, 'coder', piece.path) && fs.existsSync(path.join(this.run.root, piece.path))) continue; // written before the retry
       if (piece.code !== undefined) {
         const s = this.step(stage, piece.path, 'shell', { file: piece.path, input: piece.task });
+        this.decide(s, 'write the file as the tool gave it, ask no model', 'the analysis already has its whole text (a rename is done by a tool)');
         s.code = piece.code;
         this.writeFile(piece.path, piece.code, s);
         this.written.push({ path: piece.path, code: piece.code, kind: piece.kind });
@@ -1116,6 +1264,7 @@ export class LoopEngine extends EventEmitter {
       const target = path.join(this.run.root, piece.path);
       const existing = fs.existsSync(target) ? fs.readFileSync(target, 'utf8') : '';
       const s = this.step(stage, piece.path, 'coder', { file: piece.path, input: piece.task });
+      this.decide(s, existing ? 'change the file that exists' : 'write a new file', `the plan asks for ${piece.kind || 'this file'} here (piece by ${piece.by ?? 'the plan'}); the coder reads the ${this.written.length} file(s) written before it`);
       const before = this.written.map((w) => `\`\`\`nuclear\n// ${w.path}\n${w.code}\`\`\``).join('\n\n');
       const context = [existing ? `The file exists; change it as the task says and answer the whole file:\n\`\`\`nuclear\n${existing}\`\`\`` : '', before].filter(Boolean).join('\n\n');
       const r = await this.developer('/developer/code', { task: piece.task, platform: this.run.platform, path: piece.path, kind: piece.kind, context: context.slice(-12000) });
@@ -1128,6 +1277,7 @@ export class LoopEngine extends EventEmitter {
       s.log = String(r.data.check ?? '');
       let ok = r.data.check === 'ok';
       if (!ok && this.run.spec.lead === 'claude') {
+        this.decide(s, 'hand the file to Claude', `the local coder left compiler errors after ${r.data.attempts} attempts and Claude leads this run`);
         this.end(s, 'failed', `the local coder left errors after ${r.data.attempts} attempts: Claude takes it`);
         const fix = this.step(stage, `Claude fixes ${piece.path}`, 'claude', { file: piece.path });
         const prompt = `The local developer wrote \`${piece.path}\` for this task and could not fix the compiler's errors.\n\nTask: ${piece.task}\n\nIts answer:\n\`\`\`nuclear\n${s.code}\`\`\`\n\nErrors:\n${s.log}\n\nWrite the corrected file to ${piece.path} (create its folders), check it with nuclear_check until it says ok, and keep the corrected version as an example with graph_remember (collection "examples", the task then the code) so the local developer learns it. Answer the final code in one \`\`\`nuclear block.`;
@@ -1138,6 +1288,7 @@ export class LoopEngine extends EventEmitter {
         fix.code = code;
         this.end(fix, ok ? 'passed' : 'failed', ok ? 'fixed by Claude' : 'no code');
       } else {
+        if (!ok) this.decide(s, 'stop the stage', `the file still has compiler errors after ${r.data.attempts} attempts and no frontier model leads this run`);
         this.end(s, ok ? 'passed' : 'failed', ok ? `ok in ${r.data.attempts} attempt(s)` : String(r.data.check).split('\n')[0]);
       }
       if (!ok) return false;
@@ -1218,7 +1369,10 @@ export class LoopEngine extends EventEmitter {
     if (!this.run.spec.pieces.length && this.generated().length) {
       // every file of the run was generated: the generators write the tests of what they generate (and none for a
       // backend resource that reads another API: a local model would test against the real one)
-      this.end(this.step(stage, 'Nothing left to test first', 'tester'), 'skipped', 'every file of this run was generated: the generators wrote its tests, and the verification runs them');
+      const none = this.step(stage, 'Nothing left to test first', 'tester');
+      const tests = this.generated().filter((f) => /(^|\/)tests?\//.test(f));
+      this.decide(none, 'write no test first', tests.length ? `every file of this run was generated, its tests too (${tests.join(', ')})` : 'every file of this run was generated, and the generators wrote no test: they write none for what cannot run alone (a resource that reads another API)');
+      this.end(none, 'skipped', tests.length ? `the generators wrote ${tests.length} test file(s): the verification runs them` : 'every file was generated and none is a test: only the acceptance step holds the criteria against the result');
       return true;
     }
     const file = this.testFile();
@@ -1245,6 +1399,7 @@ export class LoopEngine extends EventEmitter {
     // by any piece, so the run stops here, saying so, instead of repairing in circles later
     const missing = this.unplanned(s.code);
     if (missing.length) {
+      this.decide(s, 'stop the run here', `the tests inject ${missing.join(', ')} and no piece of the plan declares it: no code could make them pass`);
       this.end(s, 'failed', `the tests need ${missing.join(', ')}, which is not in the plan (${this.planSummary()}): the plan does not cover the spec`);
       return false;
     }
@@ -1258,7 +1413,7 @@ export class LoopEngine extends EventEmitter {
     const stage = this.stage('verify');
     const run = [...this.config.commands.build, ...this.config.commands.test];
     for (let round = 1; round <= 3; round++) {
-      if (await this.commands(stage, run, true)) return true;
+      if (await this.commands(stage, run, true)) return this.accept(stage);
       const failed = [...stage.steps].reverse().find((x) => x.actor === 'shell' && x.status === 'skipped');
       const told = await this.explain(failed?.log ?? '');
       if (failed) failed.agent = told.text;
@@ -1273,6 +1428,7 @@ export class LoopEngine extends EventEmitter {
       // no frame in a file of the run: every piece the failure names, else every piece
       const mine = this.written.filter((w) => !fixing || w.kind !== 'tests');
       const targets = files.length ? files : mine.filter((w) => told.text.includes(path.basename(w.path, '.nuc'))).map((w) => w.path);
+      if (failed) this.decide(failed, `repair ${(targets.length ? targets : mine.map((w) => w.path)).join(', ') || 'nothing'} (round ${round} of 3)`, files.length ? 'the failure names these files of the run' : targets.length ? 'the failure names no line of the run, but it names these files' : 'the failure names no file of the run: every piece is tried');
       for (const file of targets.length ? targets : mine.map((w) => w.path)) {
         await this.repairWith(stage, file, `The project's tests fail (round ${round}). Fix this file so they pass; the tests say what the code must do (change a test only if it contradicts the spec).\n\n${told.text}`);
       }
@@ -1283,7 +1439,35 @@ export class LoopEngine extends EventEmitter {
       await this.claude(stage, fix, `The project's tests still fail after the local developer's repairs:\n\n${left?.agent ?? left?.log ?? ''}\n\nFix the .nuc files (never build/), then run nuclear_check with path "${this.run.root}" and keep each fix a junior could learn with graph_remember (collection "examples").`, ['Read', 'Edit', 'Write', 'mcp__nuclear__nuclear_check', 'mcp__nuclear__nuclear_help', 'mcp__nuclear__graph_search', 'mcp__nuclear__graph_remember']);
       this.end(fix, 'passed', 'done');
     }
-    return this.commands(stage, run);
+    return (await this.commands(stage, run)) && this.accept(stage);
+  }
+
+  /** Each acceptance criterion held against what the run left (ADR-0102): the facts come from tools (the files of the
+   * run, how many tests they declare, the commands that passed) and the local reviewer says, per criterion, whether
+   * they show it met and where. It never fails the run (a small model's verdict is evidence for the reviewer, not a
+   * gate): a criterion not shown met is listed as left, so a run never says there is nothing left when there is. */
+  private async accept(stage: Stage): Promise<true> {
+    const criteria = this.run.spec.criteria;
+    const paths = [...new Set([...this.generated(), ...this.written.map((w) => w.path)])].filter((f) => fs.existsSync(path.join(this.run.root, f)));
+    const texts = paths.map((f) => ({ path: f, code: fs.readFileSync(path.join(this.run.root, f), 'utf8') }));
+    const tests = texts.filter((t) => t.path.startsWith('test/')).reduce((n, t) => n + (t.code.match(/@test\(/g) ?? []).length, 0);
+    const facts = [`The run wrote ${texts.length} file(s): ${paths.join(', ') || 'none'}.`, `They declare ${tests} test(s).`, `These commands passed: ${stage.steps.filter((x) => x.actor === 'shell' && x.status === 'passed' && x.input).map((x) => x.input).join('; ') || 'none'}.`].join('\n');
+    const s = this.step(stage, 'Acceptance criteria', 'tester', { input: `${criteria.map((c, i) => `${i + 1}. ${c}`).join('\n')}\n\n${facts}` });
+    const files = texts.map((t) => `\`\`\`nuclear\n// ${t.path}\n${t.code}\`\`\``).join('\n\n');
+    const r = await this.developer('/developer/accept', { task: criteria.map((c, i) => `${i + 1}. ${c}`).join('\n'), platform: this.run.platform, context: `${facts}\n\n${files}`.slice(0, 16000) }, s);
+    if (!r.ok) {
+      this.run.acceptance = undefined;
+      this.end(s, 'skipped', `not checked: the local reviewer did not answer (${r.error.split('\n')[0]})`);
+      return true;
+    }
+    s.trace = r.data.trace ?? [];
+    s.log = String(r.data.report ?? '');
+    const said = new Map([...s.log.matchAll(/^\s*(\d+)\s*\|\s*(not met|met)\s*\|\s*(.+)$/gim)].map((m) => [Number(m[1]), { met: m[2].toLowerCase() === 'met', evidence: m[3].trim() }]));
+    this.run.acceptance = criteria.map((c, i) => ({ criterion: c, met: said.get(i + 1)?.met ?? false, evidence: said.get(i + 1)?.evidence ?? 'the reviewer said nothing about it' }));
+    for (const a of this.run.acceptance) this.decide(s, `${a.met ? 'met' : 'not shown met'}: ${a.criterion}`, a.evidence);
+    const open = this.run.acceptance.filter((a) => !a.met);
+    this.end(s, open.length ? 'skipped' : 'passed', open.length ? `${open.length} of ${criteria.length} not shown met (left for the reviewer): ${open.map((a) => a.criterion).join('; ').slice(0, 300)}` : `${criteria.length} of ${criteria.length} shown met`);
+    return true;
   }
 
   /** A failing output told in Nuclear: `dragonfly explain --json` (the message, a hint and the .nuc lines with their
@@ -1350,6 +1534,7 @@ export class LoopEngine extends EventEmitter {
     // a test file is repaired against the plan's names: the compiler says what is wrong, the plan what to use instead
     const task = `${problem}\n\n${isTest ? `${this.testNames()}\n\n` : ''}Answer the whole file.`;
     const s = this.step(stage, `Repair ${file}`, isTest ? 'tester' : 'coder', { file, input: task });
+    this.decide(s, `give ${file} to the ${isTest ? 'tester' : 'coder'}`, `${isTest ? 'it is a test file: it is repaired against the names of the plan' : 'it is a file of the code'}; ${problem.split('\n')[0].slice(0, 160)}`);
     const r = await this.developer(isTest ? '/developer/test' : '/developer/code', { task, platform: this.run.platform, path: file, kind: this.written.find((w) => w.path === file)?.kind ?? '', context: `The file now:\n\`\`\`nuclear\n${code}\`\`\`\n\nThe files it uses:\n${others}`.slice(-12000) });
     if (r.ok && r.data.check === 'ok' && String(r.data.code).trim()) {
       s.trace = r.data.trace ?? [];
@@ -1680,6 +1865,13 @@ function lastLine(text: string): string {
     return `${errors.length} error(s), first ${d.file ?? ''}:${d.line ?? ''} ${d.code ?? ''} ${d.message ?? ''}`.slice(0, 200);
   }
   const lines = text.trim().split('\n');
+  // the compiler's own words (`error[N0116]: ...`, and under it ` --> file:line:col`): the first error, not the
+  // caret under its last one
+  const told = lines.filter((l) => /^error\b/.test(l));
+  if (told.length) {
+    const at = lines[lines.indexOf(told[0]) + 1]?.match(/-->\s*(\S+)/)?.[1];
+    return `${told.length} error(s), first ${at ? at + ' ' : ''}${told[0]}`.slice(0, 240);
+  }
   return (lines[lines.length - 1] ?? '').slice(0, 200);
 }
 

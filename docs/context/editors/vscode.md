@@ -207,8 +207,14 @@ controllers/screens. The page renders the answers' markdown itself (code blocks,
 A tool of the workspace strip (`Ctrl+Alt+P`, id `loop`), one full-screen webview like Devices and HTTP.
 `loopEngine.ts` has no VS Code import (a node script drives it; `npm test` runs `test/loop.test.ts` with node:test):
 retries (`backoff`: exponential with full jitter, capped, `Retry-After` wins; `transientStatus`; `config.retry`),
-`start(from?)` resumes a failed run from its first failed stage (earlier attempt in `run.previous`, `restoreWritten`
-reads the files back), `diagnose()` asks `/developer/diagnose` when a stage fails (`run.diagnosis`); `Spec`, `Run`, `Stage`, `Step` (each with an
+`start(from?, step?)` runs a run again: from its first failed stage, from a stage (`from`), or from one step by its
+id (`step`: it and every step after it; the ones before it are kept), `restart()` from scratch; `guard()` refuses a
+run that is running, `undo()` puts back what the steps left out wrote (`loopSafety.rollback`: a file whose `digest`
+is not the one the write left is kept and named), `forget()` moves them to `run.previous` with the reason, `planKept()`
+keeps the pieces the user wrote and drops the planner's; `upgradeRun()` gives a run of an older `ENGINE` today's
+stages and makes its next retry a restart; `decide()` records a step's `decisions` (`Decision`: what, why); `accept()`
+asks `/developer/accept` after a passing verification (`Run.acceptance`, never a gate); `restoreWritten`
+reads the files back, `diagnose()` asks `/developer/diagnose` when a stage fails (`run.diagnosis`); `Spec`, `Run`, `Stage`, `Step` (each with an
 `Actor`: you, claude, planner, coder, tester, security, shell, graph), `LoopEngine.start()` runs spec → generate →
 plan → tests first → code → verify → security → artifacts → deploy (generate, ADR-0103: `specResources` — the spec's
 `## Resources` or its `GET <url>` lines — through `dragonfly gen resource ... --from-spec`, the changed files found by
@@ -230,13 +236,15 @@ site, email and API token in VS Code secret storage `nuclear.loop.jira`), `githu
 `criteriaOf` reads the list under "Acceptance criteria". `suggestContext` ranks the project's and the user's `.md`
 (agent instructions first, then specs, context, ADRs, skills, agent definitions) by the words of the spec.
 `loopPanel.ts` draws it: the runs, the spec form (use case → spec written or imported → context → who leads, with an
-optional plan preview by the local planner), and a run as a C4-like pipeline: level 1 the stages, a click zooms
-(`transform-origin` at the clicked node) into a stage's steps, another into a step (trace, code, output, input);
-`Escape` zooms out.
+optional plan preview by the local planner), and a run as a graph: a column per stage, a node per step in the order it ran, the
+steps its agent followed as nodes under it, edges between them; a click on a node opens a drawer beside the graph
+(*What it did*, its decisions, input, output, code) with *Run again from this step*; each stage has *Run <stage>
+again* and the run *Run again from scratch* (a modal confirmation: it undoes files). The messages are `retry`,
+`retryStep`, `retryStage`, `scratch`.
 
 `src/loopCli.ts` is `nuclear-loop` (`npm run loop` → `out/nuclear-loop.js`, also part of `compile`; `stage.sh` puts
 it in the installation's `bin/` with a `node` wrapper): `run [spec.md] [--lead]` (`parseSpecMarkdown`, the inverse of
-`specMarkdown`; no file = the spec changed last; the project is the closest folder up with `config.nuc`), `ci
+`specMarkdown`; no file = the spec changed last; the project is the closest folder up with `config.nuc`), `retry <run> [--from <stage> | --step <id>]`, `restart <run>`, `ci
 [stage...]` (`ciCommands`, the same grouping `ciFile` exports), `export <provider>`, `runs`. The JetBrains tool window
 drives the Loop through it (no Zed: the Loop is for VS Code and Android Studio only, decided by the user).
 

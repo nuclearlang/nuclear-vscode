@@ -1,16 +1,17 @@
 // The Loop tool (ADR-0102): one full-screen page, like Devices and HTTP. On the left the runs of the active project;
 // in the middle either the spec form (the start of every piece of work: the use case, the spec written here or
-// imported from Jira or GitHub, the context the agents get, who leads) or a run drawn as a pipeline. The pipeline
-// reads like a C4 diagram: level 1 is the whole process, a click on a stage zooms into its steps (level 2), a click on
-// a step zooms into what its actor did (level 3: the trace, the code, the output). The engine (loopEngine.ts) does
-// the work; this file only draws it and passes the user's choices. Plain HTML and script, no framework.
+// imported from Jira or GitHub, the context the agents get, who leads) or a run drawn as a graph: a column per stage,
+// a node per step in the order it ran and, under each step, the steps its agent followed. A click on a node opens it
+// beside the graph: what it did, the decisions it took and why, its input, its output and its code. Any step can be
+// run again (passed or failed), and the whole run from scratch. The engine (loopEngine.ts) does the work; this file
+// only draws it and passes the user's choices. Plain HTML and script, no framework.
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as vscode from 'vscode';
 import { jiraAuth, machineConfig } from './aiSettings';
 import { notices } from './notifications';
 import { readCard } from './card';
-import { CiProvider, ciFile, githubIssue, jiraIssue, JiraAuth, jiraMine, listRuns, LoopEngine, newRun, Piece, readConfig, recoverRuns, Run, slug, Spec, suggestContext, writeConfig, CONFIG_FILE } from './loopEngine';
+import { CiProvider, ciFile, githubIssue, jiraIssue, JiraAuth, jiraMine, listRuns, LoopEngine, newRun, Piece, readConfig, recoverRuns, Run, slug, Spec, StageId, suggestContext, writeConfig, CONFIG_FILE } from './loopEngine';
 
 export interface LoopProject {
   root: string;
@@ -29,7 +30,7 @@ type Message =
   | { type: 'plan'; spec: Spec }
   | { type: 'start'; spec: Spec }
   | { type: 'stop'; id: string }
-  | { type: 'retry'; id: string; step: boolean }
+  | { type: 'retry'; id: string; step?: boolean | string; stage?: StageId; scratch?: boolean }
   | { type: 'open'; file: string }
   | { type: 'exportCi'; provider: CiProvider }
   | { type: 'config' };
@@ -194,7 +195,14 @@ export class LoopPanel {
       case 'retry': {
         const run = listRuns(this.root).find((r) => r.id === m.id);
         if (!run || engines.has(m.id)) return;
-        return this.drive(run, (e) => e.start(undefined, m.step));
+        if (m.scratch) {
+          // it undoes files: said before it is done (a file changed since the run wrote it is kept either way)
+          const files = [...new Set((run.writes ?? []).map((w) => w.path))];
+          const go = await vscode.window.showWarningMessage(`Run "${run.spec.title}" again from scratch?`, { modal: true, detail: `Every stage runs again from the specification. ${files.length ? `The ${files.length} file(s) this run wrote go back to what they were first (${files.slice(0, 6).join(', ')}${files.length > 6 ? '…' : ''}); a file you changed since is kept.` : 'This run wrote no file.'} The attempt that ends here stays in the run's history.` }, 'Run from scratch');
+          if (go !== 'Run from scratch') return;
+          return this.drive(run, (e) => e.restart());
+        }
+        return this.drive(run, (e) => e.start(m.stage, m.step ?? false));
       }
       case 'open': {
         const file = path.isAbsolute(m.file) ? m.file : path.join(this.root, m.file);
@@ -246,7 +254,7 @@ function html(webview: vscode.Webview): string {
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}';">
 <style>${CSS}</style></head><body>
 <header>
-  <div class="brand"><svg viewBox="0 0 16 16"><path d="M8 1.5a6.5 6.5 0 1 0 6.3 8"/><path d="M14.5 4.5v4h-4"/></svg><b>Loop</b><span class="muted">spec → plan → code → test → security → artifacts → deploy</span></div>
+  <div class="brand"><svg viewBox="0 0 16 16"><path d="M8 1.5a6.5 6.5 0 1 0 6.3 8"/><path d="M14.5 4.5v4h-4"/></svg><b>Loop</b><span class="muted">spec → generate → plan → tests → code → verify → security → artifacts → deploy</span></div>
   <select id="project" title="Project"></select>
   <div class="grow"></div>
   <button id="new" class="primary">＋ New spec</button>
@@ -273,7 +281,7 @@ button, select, input, textarea { font: inherit; color: var(--vscode-input-foreg
 button { cursor: pointer; background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); border: none; }
 button:hover { filter: brightness(1.15); }
 button.primary { background: var(--vscode-button-background); color: var(--vscode-button-foreground); }
-button:focus-visible, a:focus-visible, .node:focus-visible, .card:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+button:focus-visible, a:focus-visible, .gnode:focus-visible, .card:focus-visible, .accept:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 textarea { width: 100%; resize: vertical; }
 header { display: flex; align-items: center; gap: 10px; padding: 8px 14px; border-bottom: 1px solid var(--line); height: 46px; }
 .brand { display: flex; align-items: center; gap: 8px; }
@@ -295,7 +303,7 @@ aside { width: 260px; border-right: 1px solid var(--line); overflow: auto; paddi
 .run-item small { display: block; color: var(--muted); }
 .legend { margin-top: auto; border-top: 1px solid var(--line); padding-top: 10px; display: grid; gap: 4px; }
 .legend div { display: flex; gap: 6px; align-items: center; font-size: 12px; }
-main { flex: 1; overflow: auto; position: relative; }
+main { flex: 1; overflow: auto; position: relative; min-width: 0; }
 .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; margin-top: 4px; background: var(--skip); }
 .st-passed { background: var(--ok); } .st-failed { background: var(--bad); } .st-running { background: var(--run); animation: pulse 1.2s infinite; } .st-skipped { background: transparent; border: 1.5px solid var(--skip); }
 @keyframes pulse { 50% { opacity: .35; } }
@@ -326,48 +334,65 @@ label.f { display: block; font-size: 12px; color: var(--muted); margin: 10px 0 4
 .lead .card ul { margin: 6px 0 0 16px; padding: 0; color: var(--muted); font-size: 12px; }
 table.pieces { width: 100%; border-collapse: collapse; margin-top: 8px; } table.pieces td { border-top: 1px solid var(--line); padding: 4px; } table.pieces input { width: 100%; }
 .go { margin-top: 28px; display: flex; gap: 10px; justify-content: flex-end; }
-/* the run */
-.crumbs { padding: 12px 22px 0; display: flex; gap: 6px; align-items: center; color: var(--muted); }
-.crumbs a { cursor: pointer; color: var(--vscode-textLink-foreground); }
-.view { padding: 18px 22px 60px; transform-origin: var(--ox, 50%) var(--oy, 30%); }
-.view.zoom { animation: zoom .32s ease-out; }
-.view.back { animation: back .28s ease-out; }
-@keyframes zoom { from { transform: scale(.25); opacity: 0; } to { transform: none; opacity: 1; } }
-@keyframes back { from { transform: scale(1.6); opacity: 0; } to { transform: none; opacity: 1; } }
-@media (prefers-reduced-motion: reduce) { .view.zoom, .view.back, .st-running { animation: none; } }
-.head { display: flex; gap: 14px; align-items: baseline; flex-wrap: wrap; }
+/* the run: its graph and the node that is open */
+main.run { overflow: hidden; display: flex; flex-direction: column; }
+.top { padding: 14px 22px 8px; flex-shrink: 0; }
+.head { display: flex; gap: 12px; align-items: baseline; flex-wrap: wrap; }
 .head h1 { font-size: 19px; margin: 0; }
-.diagnosis { margin: 8px 0 12px; padding: 8px 12px; border-left: 3px solid #d97706; background: var(--vscode-textCodeBlock-background); }
-.diagnosis pre { white-space: pre-wrap; margin: 6px 0 0; font-family: var(--vscode-editor-font-family); }
-.pill { padding: 2px 9px; border-radius: 10px; font-size: 11.5px; border: 1px solid var(--line); }
-.pipeline { display: flex; align-items: stretch; margin: 26px 0 18px; overflow-x: auto; padding-bottom: 6px; }
-.node { min-width: 118px; flex: 1 1 0; border: 1px solid var(--line); border-radius: 10px; padding: 12px; background: var(--card); cursor: pointer; position: relative; }
-.node:hover { border-color: var(--accent); transform: translateY(-1px); }
-.node.running { border-color: var(--run); box-shadow: 0 0 0 3px color-mix(in srgb, var(--run) 25%, transparent); }
-.node.failed { border-color: var(--bad); } .node.passed { border-color: color-mix(in srgb, var(--ok) 60%, var(--line)); }
-.node .t { display: flex; gap: 7px; align-items: center; font-weight: 600; }
-.node .n { font-size: 11px; color: var(--muted); }
-.node .meta { color: var(--muted); font-size: 11.5px; margin-top: 6px; min-height: 16px; }
-.node .actors { display: flex; gap: 3px; margin-top: 8px; }
-.link { width: 16px; flex-shrink: 0; align-self: center; height: 2px; background: var(--line); position: relative; }
-.link.flow { background: linear-gradient(90deg, var(--run) 50%, var(--line) 50%); background-size: 12px 2px; animation: flow .6s linear infinite; }
-@keyframes flow { to { background-position: 12px 0; } }
-.grid2 { display: grid; grid-template-columns: 1.4fr 1fr; gap: 16px; }
-.box { border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; background: var(--card); }
-.box h3 { margin: 0 0 8px; font-size: 13px; }
+.hint { margin-top: 6px; } .hint a { cursor: pointer; color: var(--vscode-textLink-foreground); }
+.diagnosis { margin: 8px 0; padding: 8px 12px; border-left: 3px solid #d97706; background: var(--vscode-textCodeBlock-background); }
+.diagnosis pre { white-space: pre-wrap; margin: 6px 0 0; max-height: 22vh; font-family: var(--vscode-editor-font-family); }
+.accept { margin: 8px 0 0; padding: 6px 12px; border-left: 3px solid var(--ok); background: var(--vscode-textCodeBlock-background); cursor: pointer; }
+.accept.warn { border-left-color: var(--run); } .accept.bad { border-left-color: var(--bad); }
+.pill { padding: 2px 9px; border-radius: 10px; font-size: 11.5px; border: 1px solid var(--line); white-space: nowrap; }
+.split { flex: 1; min-height: 0; display: flex; border-top: 1px solid var(--line); }
+.graph { flex: 1 1 56%; overflow: auto; padding: 18px 22px; }
+.canvas { position: relative; }
+.canvas svg { position: absolute; left: 0; top: 0; pointer-events: none; }
+.canvas svg path { fill: none; stroke: var(--line); stroke-width: 1.5; }
+.canvas svg path.arrow { marker-end: url(#ah); }
+.canvas svg path.flow { stroke: var(--run); stroke-dasharray: 6 6; animation: dash .6s linear infinite; }
+.canvas svg marker path { fill: var(--skip); stroke: none; }
+@keyframes dash { to { stroke-dashoffset: -12; } }
+.gnode { position: absolute; border: 1px solid var(--line); border-radius: 8px; background: var(--card); cursor: pointer; overflow: hidden; }
+.gnode:hover { border-color: var(--accent); }
+.gnode.sel { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent); }
+.gnode.running { border-color: var(--run); } .gnode.failed { border-color: var(--bad); }
+.gnode.passed { border-color: color-mix(in srgb, var(--ok) 55%, var(--line)); }
+.gstage { padding: 8px 11px; border-radius: 10px; }
+.gstage .n { font-size: 11px; color: var(--muted); white-space: nowrap; }
+.gstage .t { display: flex; gap: 7px; align-items: center; font-weight: 600; white-space: nowrap; }
+.gstage .t .dot { margin-top: 0; }
+.gstep { display: grid; grid-template-columns: 20px 1fr auto; gap: 7px; align-items: center; padding: 5px 8px; }
+.gt { min-width: 0; } .gt b, .gt small { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.gt b { font-weight: 600; font-size: 12px; } .gt small { color: var(--muted); font-size: 11px; }
+.gm { display: grid; justify-items: end; font-size: 10.5px; color: var(--muted); white-space: nowrap; }
+.dec { color: var(--accent); }
+.gsub { padding: 2px 8px; font-size: 11px; line-height: 18px; white-space: nowrap; text-overflow: ellipsis; border-radius: 6px; color: var(--muted); }
+.gsub b { text-transform: uppercase; font-size: 10px; color: var(--fg); }
+.drawer { flex: 1 1 44%; min-width: 340px; max-width: 760px; overflow: auto; border-left: 1px solid var(--line); padding: 14px 18px 60px; }
+.drawer h2 { font-size: 16px; margin: 0; overflow-wrap: anywhere; }
+.drawer h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 18px 0 8px; }
+.dhead { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 4px; }
+.sum { margin: 8px 0; overflow-wrap: anywhere; }
+.acts { display: flex; gap: 8px; flex-wrap: wrap; margin: 10px 0; }
+.block { display: block; }
 .who { display: grid; gap: 10px; } .who > div { display: grid; grid-template-columns: 22px 1fr; gap: 8px; align-items: start; }
 .who small { color: var(--muted); display: block; }
-.steps { position: relative; margin-left: 10px; border-left: 2px solid var(--line); padding-left: 18px; }
-.stepn { position: relative; border: 1px solid var(--line); border-radius: 8px; padding: 9px 12px; margin-bottom: 10px; cursor: pointer; background: var(--card); display: grid; grid-template-columns: 22px 1fr auto; gap: 10px; align-items: center; }
-.stepn:hover { border-color: var(--accent); }
-.stepn::before { content: ''; position: absolute; left: -26px; top: 15px; width: 12px; height: 12px; border-radius: 50%; background: var(--bg); border: 2px solid var(--line); }
-.stepn.passed::before { border-color: var(--ok); background: var(--ok); } .stepn.failed::before { border-color: var(--bad); background: var(--bad); } .stepn.running::before { border-color: var(--run); background: var(--run); }
-.stepn small { color: var(--muted); display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 60vw; }
+.crow { display: grid; grid-template-columns: 16px 1fr; gap: 8px; align-items: start; padding: 4px 0; }
+.crow small { display: block; color: var(--muted); overflow-wrap: anywhere; } .crow .dot { margin-top: 5px; }
+.crow.link { cursor: pointer; border-radius: 4px; } .crow.link:hover { background: var(--vscode-list-hoverBackground); }
+.okc { color: var(--ok); } .badc { color: var(--run); }
+.flow-n { display: grid; grid-template-columns: 22px 1fr; gap: 9px; border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; background: var(--card); overflow-wrap: anywhere; }
+.flow-n.sel { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.flow-n b { text-transform: uppercase; font-size: 11px; color: var(--muted); }
+.flow-a { color: var(--muted); padding-left: 16px; line-height: 16px; }
+.num2 { width: 20px; height: 20px; border-radius: 50%; border: 1.5px solid var(--accent); color: var(--accent); font-size: 11px; font-weight: 700; display: flex; align-items: center; justify-content: center; }
+.decn { display: grid; grid-template-columns: 16px 1fr; gap: 8px; padding: 6px 0; border-top: 1px solid var(--line); overflow-wrap: anywhere; }
+.decn > span { color: var(--accent); }
+.drawer a { cursor: pointer; color: var(--vscode-textLink-foreground); }
+@media (prefers-reduced-motion: reduce) { .st-running, .canvas svg path.flow { animation: none; } }
 pre { background: var(--vscode-textCodeBlock-background, #0002); padding: 10px; border-radius: 6px; overflow: auto; max-height: 52vh; white-space: pre-wrap; font: 12px/1.45 var(--vscode-editor-font-family); margin: 0; }
-.trace { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 8px 0 14px; }
-.trace .tn { border: 1px solid var(--line); border-radius: 6px; padding: 6px 9px; background: var(--card); max-width: 300px; }
-.trace .tn b { display: block; font-size: 11px; text-transform: uppercase; color: var(--muted); }
-.trace .arrow { color: var(--muted); }
 .dtabs { display: flex; gap: 4px; margin: 10px 0; }
 .dtabs button.sel { background: var(--vscode-button-background); color: var(--vscode-button-foreground); }
 .empty { padding: 60px; text-align: center; color: var(--muted); }
@@ -409,7 +434,8 @@ const TEMPLATES = {
   diagram: 'Draw <part> as C4 diagrams (context, containers, components) in Mermaid.\n\nAcceptance criteria:\n- ',
 };
 let S = { projects: [], root: '', card: null, runs: [], running: [], config: null };
-let view = { mode: 'form', run: null, stage: null, step: null, tab: 'trace' };
+// auto: nothing was chosen, so the drawer follows the run (the step running, else the one that failed)
+let view = { mode: 'form', run: null, stage: null, step: null, trace: null, tab: 'trace', auto: true };
 let form = blank();
 function blank() { return { useCase: 'feature', title: '', description: TEMPLATES.feature, criteria: [''], context: [], source: { kind: 'local' }, lead: 'claude', pieces: [], suggestions: [], srcTab: 'write', mine: [] }; }
 const av = (a) => '<span class="av" style="background:' + ACTORS[a].color + '" title="' + esc(ACTORS[a].name) + '">' + ACTORS[a].letter + '</span>';
@@ -458,64 +484,122 @@ function specOf() {
   return { id: '', title: form.title.trim(), useCase: form.useCase, description: form.description, criteria: form.criteria.map((c) => c.trim()).filter(Boolean), context: form.context, source: form.source, lead: form.lead, pieces: form.pieces.filter((p) => p.path && p.task) };
 }
 
-// ---------- the run ----------
+// ---------- the run: a graph of what was done ----------
+// A column per stage, a node per step under it in the order it ran, and under each step the steps its agent followed
+// (recall, write, repair...). A click on any node opens it on the right: what it did, the decisions it took and why,
+// its input, its output and its code. Any step can be run again, and the whole run from scratch.
+const COLW = 222, GAPX = 40, HEAD = 56, NODE = 50, SUB = 24, GAPY = 12, RAIL = 14;
+function failedStep(r) { for (const st of r.stages) { if (st.status !== 'failed') continue; const bad = [...st.steps].reverse().find((x) => x.status === 'failed'); if (bad) return { st, x: bad }; } return null; }
+/** Where the run is, or where it failed: what is open when the user chose nothing. */
+function pick(r) {
+  for (const st of r.stages) for (const x of st.steps) if (x.status === 'running') return { stage: st.id, step: x.id };
+  const f = failedStep(r);
+  return f ? { stage: f.st.id, step: f.x.id } : { stage: null, step: null };
+}
 function drawRun() {
   const r = view.run;
   if (!r) { $('#main').innerHTML = '<div class="empty">Choose a run, or start a new spec.</div>'; return; }
-  const stage = r.stages.find((s) => s.id === view.stage);
-  const step = stage?.steps.find((s) => s.id === view.step);
-  const crumbs = '<div class="crumbs"><a data-go="1">Pipeline</a>' + (stage ? ' › <a data-go="2">' + esc(stage.title) + '</a>' : '') + (step ? ' › <span>' + esc(step.title) + '</span>' : '') + '</div>';
-  let body = '';
-  if (!stage) body = level1(r);
-  else if (!step) body = level2(r, stage);
-  else body = level3(r, stage, step);
-  const prevLevel = $('#main').dataset.level;
-  const level = step ? 3 : stage ? 2 : 1;
-  $('#main').innerHTML = crumbs + '<div class="view" id="v">' + body + '</div>';
-  $('#main').dataset.level = level;
-  if (prevLevel && +prevLevel !== level) $('#v').classList.add(+prevLevel < level ? 'zoom' : 'back');
-  $('#v').style.setProperty('--ox', view.ox ?? '50%'); $('#v').style.setProperty('--oy', view.oy ?? '30%');
+  if (view.auto) Object.assign(view, pick(r));
+  const g = $('#graph'), d = $('#drawer');
+  const keep = g && $('#main').dataset.run === r.id ? [g.scrollLeft, g.scrollTop, d.scrollTop] : null;
+  $('#main').innerHTML = head(r) + '<div class="split"><div class="graph" id="graph">' + graph(r) + '</div><div class="drawer" id="drawer">' + drawer(r) + '</div></div>';
+  $('#main').dataset.run = r.id;
+  if (keep) { $('#graph').scrollLeft = keep[0]; $('#graph').scrollTop = keep[1]; $('#drawer').scrollTop = keep[2]; }
+  else $('.gnode.sel')?.scrollIntoView({ block: 'center', inline: 'center' });
 }
-function level1(r) {
-  const nodes = r.stages.map((s, i) => {
-    const acts = [...new Set(s.steps.map((x) => x.actor))]; const show = acts.length ? acts : s.actors;
-    const last = s.steps[s.steps.length - 1];
-    return (i ? '<div class="link' + (s.status === 'running' ? ' flow' : '') + '"></div>' : '') + '<div class="node ' + s.status + '" data-stage="' + s.id + '" tabindex="0"><div class="n">' + (i + 1) + '</div><div class="t"><span class="dot st-' + s.status + '"></span>' + esc(s.title) + '</div><div class="meta">' + (s.status === 'pending' ? 'waiting' : s.status === 'skipped' ? 'skipped' : s.steps.length + ' step' + (s.steps.length === 1 ? '' : 's') + ' · ' + dur(s)) + '</div><div class="meta">' + esc(last?.summary ?? '') + '</div><div class="actors">' + show.map(av).join('') + '</div></div>';
-  }).join('');
-  const crit = r.spec.criteria.map((c) => '<div>☐ ' + esc(c) + '</div>').join('');
+function head(r) {
+  const bad = failedStep(r);
+  const idle = r.status !== 'running';
+  const acc = r.acceptance ?? [];
+  const met = acc.filter((a) => a.met).length;
+  return '<div class="top"><div class="head"><h1>' + esc(r.spec.title) + '</h1><span class="pill"><span class="dot st-' + r.status + '"></span> ' + r.status + '</span><span class="muted">' + esc(r.spec.useCase) + ' · ' + (r.spec.lead === 'claude' ? 'Claude leads' : 'local only') + (r.analysis ? ' · strategy ' + esc(r.analysis.strategy.replace(/^strategy:/, '')) : '') + ' · ' + dur({ started: r.created, ended: r.ended }) + (r.costUsd ? ' · Claude USD ' + r.costUsd.toFixed(3) : '') + '</span><div class="grow"></div>'
+    + (idle ? '' : '<button id="stop">■ Stop</button>')
+    + (idle && bad ? '<button id="retry" class="primary" title="Go on from the step that failed; every step that passed is kept">↻ Retry ' + esc(bad.x.title.length > 44 ? bad.x.title.slice(0, 44) + '…' : bad.x.title) + '</button>' : '')
+    + (idle ? '<button id="scratch" title="The whole pipeline again from the specification: every file this run wrote goes back to what it was, then every stage runs">⟲ Run again from scratch</button>' : '')
+    + '<button data-open="specs/' + esc(r.id) + '/spec.md">Open spec</button></div>'
+    + (r.diagnosis && idle && bad ? '<div class="accept bad" data-stage="' + bad.st.id + '" data-step="' + esc(bad.x.id) + '" tabindex="0"><b>Why it failed:</b> ' + esc(r.diagnosis.split('\n').filter(Boolean).slice(0, 2).join(' · ')) + ' <span class="muted">(open the step for the whole diagnosis)</span></div>' : '')
+    + (acc.length ? '<div class="accept ' + (met === acc.length ? 'ok' : 'warn') + '" data-over="1" tabindex="0">Acceptance criteria: ' + met + ' of ' + acc.length + ' shown met' + (met === acc.length ? '' : ' — ' + esc(acc.filter((a) => !a.met).map((a) => a.criterion).join('; '))) + '</div>' : '')
+    + ((r.interrupted ?? []).slice(-1).map((i) => '<div class="muted">⚠ Interrupted at ' + esc(i.stage + (i.step ? ' · ' + i.step : '')) + ' (' + new Date(i.at).toLocaleString() + '): the process that ran it stopped; undone: ' + esc(i.undone.join(', ') || 'nothing') + '.</div>').join(''))
+    + '<div class="muted hint">Click a node to see what it did, the decisions it took and why. Any step can be run again.' + ((r.previous ?? []).length ? ' <a data-over="1">' + r.previous.length + ' earlier attempt' + (r.previous.length === 1 ? '' : 's') + '</a>' : '') + '</div></div>';
+}
+function graph(r) {
+  let nodes = '', edges = '', bottom = 0;
+  const path = (d, cls) => '<path class="' + cls + '" d="' + d + '"/>';
+  r.stages.forEach((st, i) => {
+    const x = i * (COLW + GAPX);
+    const on = view.stage === st.id && !view.step;
+    nodes += '<div class="gnode gstage ' + st.status + (on ? ' sel' : '') + '" style="left:' + x + 'px;top:0;width:' + COLW + 'px;height:' + HEAD + 'px" data-stage="' + st.id + '" tabindex="0"><div class="n">' + (i + 1) + ' · ' + (st.status === 'pending' ? 'waiting' : st.status) + (st.started ? ' · ' + dur(st) : '') + '</div><div class="t"><span class="dot st-' + st.status + '"></span>' + esc(st.title) + '</div></div>';
+    if (i) edges += path('M' + (x - GAPX) + ' ' + HEAD / 2 + ' L' + (x - 5) + ' ' + HEAD / 2, 'e arrow' + (st.status === 'running' ? ' flow' : ''));
+    let y = HEAD + GAPY * 2, from = HEAD;
+    for (const s of st.steps) {
+      const picked = view.stage === st.id && view.step === s.id;
+      edges += path('M' + (x + RAIL) + ' ' + from + ' L' + (x + RAIL) + ' ' + (y - 4), 'e arrow');
+      nodes += '<div class="gnode gstep ' + s.status + (picked ? ' sel' : '') + '" style="left:' + x + 'px;top:' + y + 'px;width:' + COLW + 'px;height:' + NODE + 'px" data-stage="' + st.id + '" data-step="' + esc(s.id) + '" tabindex="0" title="' + esc(s.title) + '">' + av(s.actor) + '<div class="gt"><b>' + esc(s.title) + '</b><small>' + esc(s.summary || (s.status === 'running' ? 'working…' : '')) + '</small></div><div class="gm">' + (s.decisions?.length ? '<span class="dec" title="' + s.decisions.length + ' decision' + (s.decisions.length === 1 ? '' : 's') + '">◆' + s.decisions.length + '</span>' : '') + '<span>' + dur(s) + '</span></div></div>';
+      y += NODE;
+      from = y;
+      (s.trace ?? []).forEach((t, k) => {
+        const mid = y + 4 + SUB / 2;
+        edges += path('M' + (x + RAIL) + ' ' + (y - 2) + ' L' + (x + RAIL) + ' ' + mid + ' L' + (x + RAIL + 14) + ' ' + mid, 'e');
+        nodes += '<div class="gnode gsub' + (picked && view.trace === k ? ' sel' : '') + '" style="left:' + (x + RAIL + 16) + 'px;top:' + (y + 4) + 'px;width:' + (COLW - RAIL - 16) + 'px;height:' + SUB + 'px" data-stage="' + st.id + '" data-step="' + esc(s.id) + '" data-trace="' + k + '" tabindex="0" title="' + esc(t.detail) + '"><b>' + esc(t.step) + '</b> ' + esc(t.detail) + '</div>';
+        y += SUB + 4;
+        from = y;
+      });
+      y += GAPY;
+    }
+    bottom = Math.max(bottom, y);
+  });
+  const w = r.stages.length * (COLW + GAPX) - GAPX, h = bottom + 24;
+  return '<div class="canvas" style="width:' + w + 'px;height:' + h + 'px"><svg width="' + w + '" height="' + h + '"><defs><marker id="ah" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L8 4 L0 8 z"/></marker></defs>' + edges + '</svg>' + nodes + '</div>';
+}
+function drawer(r) {
+  const st = r.stages.find((s) => s.id === view.stage);
+  const x = st?.steps.find((s) => s.id === view.step);
+  return x ? stepInfo(r, st, x) : st ? stageInfo(r, st) : runInfo(r);
+}
+const whoOf = (actors) => '<div class="who">' + actors.map((a) => '<div>' + av(a) + '<div><b>' + esc(ACTORS[a].name) + '</b><small>' + esc(ACTORS[a].does) + '</small><small>✕ ' + esc(ACTORS[a].not) + '</small></div></div>').join('') + '</div>';
+function runInfo(r) {
+  const acc = r.acceptance ?? [];
+  const crit = r.spec.criteria.map((c, i) => { const a = acc[i]; return '<div class="crow">' + (a ? (a.met ? '<span class="okc">☑</span>' : '<span class="badc">☐</span>') : '☐') + '<div>' + esc(c) + (a ? '<small>' + esc(a.evidence) + '</small>' : '') + '</div></div>'; }).join('');
   const active = r.stages.find((s) => s.status === 'running');
-  return '<div class="head"><h1>' + esc(r.spec.title) + '</h1><span class="pill"><span class="dot st-' + r.status + '"></span> ' + r.status + '</span><span class="muted">' + esc(r.spec.useCase) + ' · ' + (r.spec.lead === 'claude' ? 'Claude leads' : 'local only') + ' · ' + dur({ started: r.created, ended: r.ended }) + (r.costUsd ? ' · Claude USD ' + r.costUsd.toFixed(3) : '') + '</span><div class="grow"></div>' + (r.status === 'running' ? '<button id="stop">■ Stop</button>' : '') + (r.status === 'failed' || r.status === 'skipped' ? (() => { const st = r.stages.find((s) => s.status === 'failed') ?? r.stages.find((s) => s.status === 'skipped'); const bad = st ? [...st.steps].reverse().find((x) => x.status === 'failed') : undefined; return '<button id="retry" class="primary" title="Go on from the step that failed; every step that passed is kept">↻ Retry ' + esc(bad ? bad.title : (st ?? {}).title ?? 'the run') + '</button><button id="retryStage" title="Run the whole stage again; the stages before it are kept">Restart ' + esc((st ?? {}).title ?? 'stage') + '</button>'; })() : '') + '<button data-open="specs/' + esc(r.id) + '/spec.md">Open spec</button></div>'
-    + (r.diagnosis && r.status !== 'running' ? '<div class="diagnosis"><b>Why it failed</b> <span class="muted">(local diagnoser)</span><pre>' + esc(r.diagnosis) + '</pre></div>' : '')
-    + ((r.previous ?? []).length ? '<div class="muted">Retried ' + r.previous.length + ' time' + (r.previous.length === 1 ? '' : 's') + '; the earlier attempts are kept in the run file.</div>' : '')
-    + ((r.interrupted ?? []).map((i) => '<div class="muted">⚠ Interrupted at ' + esc(i.stage + (i.step ? ' · ' + i.step : '')) + ' (' + new Date(i.at).toLocaleString() + '): the process that ran it stopped; undone: ' + esc(i.undone.join(', ') || 'nothing') + '. The trace log is .nuclear/loop/runs/' + esc(r.id) + '.log.</div>').join(''))
-    + '<div class="pipeline">' + nodes + '</div>'
-    + '<div class="grid2"><div class="box"><h3>' + (active ? 'Now: ' + esc(active.title) : 'The process') + '</h3><div class="muted">' + esc((active ?? r.stages[0]).about) + '</div><h3 style="margin-top:14px">Acceptance criteria</h3>' + crit + '</div>'
-    + '<div class="box"><h3>Who does what in this run</h3><div class="who">' + [...new Set(r.stages.flatMap((s) => s.steps.length ? s.steps.map((x) => x.actor) : s.actors))].map((a) => '<div>' + av(a) + '<div><b>' + esc(ACTORS[a].name) + '</b><small>' + esc(ACTORS[a].does) + '</small><small>✕ ' + esc(ACTORS[a].not) + '</small></div></div>').join('') + '</div></div></div>'
-    + '<div class="muted" style="margin-top:14px">Click a stage to zoom into its steps.</div>';
+  const tries = (r.previous ?? []).map((p, i) => '<div class="crow"><span class="dot st-' + p.status + '"></span><div>Attempt ' + (i + 1) + ' ended ' + esc(p.status) + '; then run again from ' + esc(p.from) + (p.why ? ': ' + esc(p.why) : '') + '<small>' + new Date(p.at).toLocaleString() + (p.undone?.length ? ' · undone: ' + esc(p.undone.join(', ')) : '') + '</small></div></div>').join('');
+  return '<h2>' + (active ? 'Now: ' + esc(active.title) : 'The run') + '</h2><div class="muted">' + esc((active ?? r.stages[0]).about) + '</div>'
+    + (r.analysis ? '<h3>Strategy</h3><div>' + esc(r.analysis.title.replace(/^Strategy: /, '')) + '<small class="muted block">' + esc(r.analysis.why) + '</small></div>' : '')
+    + '<h3>Acceptance criteria' + (acc.length ? '' : ' <span class="muted">(checked when the verification passes)</span>') + '</h3>' + crit
+    + (r.notes && r.status !== 'running' ? '<h3>What the local developer says</h3><pre>' + esc(r.notes) + '</pre>' : '')
+    + (tries ? '<h3>Earlier attempts</h3>' + tries + '<small class="muted block">Their steps are kept whole in .nuclear/loop/runs/' + esc(r.id) + '.json</small>' : '')
+    + '<h3>Who does what in this run</h3>' + whoOf([...new Set(r.stages.flatMap((s) => s.steps.length ? s.steps.map((x) => x.actor) : s.actors))]);
 }
-function level2(r, s) {
-  const steps = s.steps.map((x) => '<div class="stepn ' + x.status + '" data-step="' + esc(x.id) + '" tabindex="0">' + av(x.actor) + '<div><b>' + esc(x.title) + '</b><small>' + esc(x.summary || (x.status === 'running' ? 'working…' : '')) + '</small></div><span class="muted">' + dur(x) + '</span></div>').join('');
-  return '<div class="head"><h1>' + esc(s.title) + '</h1><span class="pill"><span class="dot st-' + s.status + '"></span> ' + s.status + '</span><span class="muted">' + dur(s) + '</span></div>'
-    + '<div class="grid2" style="margin-top:14px"><div><div class="muted" style="margin-bottom:14px">' + esc(s.about) + '</div>' + (steps ? '<div class="steps">' + steps + '</div>' : '<div class="empty" style="padding:30px">' + (s.status === 'pending' ? 'It has not started.' : 'No steps.') + '</div>') + '</div>'
-    + '<div class="box"><h3>Who takes part</h3><div class="who">' + s.actors.map((a) => '<div>' + av(a) + '<div><b>' + esc(ACTORS[a].name) + '</b><small>' + esc(ACTORS[a].does) + '</small><small>✕ ' + esc(ACTORS[a].not) + '</small></div></div>').join('') + '</div></div></div>';
+function stageInfo(r, s) {
+  return '<div class="dhead"><h2>' + esc(s.title) + '</h2><span class="pill"><span class="dot st-' + s.status + '"></span> ' + s.status + '</span><span class="muted">' + dur(s) + '</span></div>'
+    + '<div class="muted">' + esc(s.about) + '</div>'
+    + (r.status !== 'running' && s.status !== 'pending' ? '<div class="acts"><button id="retryStage" class="primary" title="This whole stage and every stage after it run again; what they wrote is undone first">⟲ Run ' + esc(s.title) + ' again</button></div>' : '')
+    + '<h3>' + s.steps.length + ' step' + (s.steps.length === 1 ? '' : 's') + '</h3>' + s.steps.map((x) => '<div class="crow link" data-stage="' + s.id + '" data-step="' + esc(x.id) + '"><span class="dot st-' + x.status + '"></span><div>' + esc(x.title) + '<small>' + esc(x.summary) + '</small></div></div>').join('')
+    + '<h3>Who takes part</h3>' + whoOf(s.actors);
 }
-function level3(r, s, x) {
-  const trace = x.trace?.length ? '<div class="trace">' + x.trace.map((t, i) => (i ? '<span class="arrow">→</span>' : '') + '<div class="tn"><b>' + esc(t.step) + '</b>' + esc(t.detail) + '</div>').join('') + '</div>' : '';
+function stepInfo(r, s, x) {
   const tabs = [['trace', 'What it did'], ['code', 'Code'], ['log', x.actor === 'shell' ? 'Output' : x.actor === 'security' ? 'Findings' : 'Log'], ['agent', 'For the agent'], ['input', 'Input']].filter(([id]) => id === 'trace' || (id === 'code' ? x.code : id === 'log' ? x.log : id === 'agent' ? x.agent : x.input));
-  if (!tabs.some(([id]) => id === view.tab)) view.tab = tabs[0][0];
-  const panes = { trace: '<div class="who"><div>' + av(x.actor) + '<div><b>' + esc(ACTORS[x.actor].name) + '</b><small>' + esc(ACTORS[x.actor].does) + '</small></div></div></div>' + (trace || '<div class="muted" style="margin-top:10px">' + esc(x.summary) + '</div>'), code: '<pre>' + esc(x.code) + '</pre>', log: '<pre>' + esc(x.log) + '</pre>', agent: '<div class="muted">The failure as the local agent read it (in Nuclear, by dragonfly explain); the raw output is in Output.</div><pre>' + esc(x.agent) + '</pre>', input: '<pre>' + esc(x.input) + '</pre>' };
-  return '<div class="head">' + av(x.actor) + '<h1>' + esc(x.title) + '</h1><span class="pill"><span class="dot st-' + x.status + '"></span> ' + x.status + '</span><span class="muted">' + dur(x) + (x.tool ? ' · tool ' + esc(x.tool) : '') + '</span><div class="grow"></div>' + (x.status === 'failed' && r.status !== 'running' ? '<button id="retry" class="primary" title="Go on from this step; every step that passed is kept">↻ Retry this step</button>' : '') + (x.file ? '<button data-open="' + esc(x.file) + '">Open ' + esc(x.file) + '</button>' : '') + '</div>'
-    + '<div class="muted" style="margin-top:6px">' + esc(x.summary) + '</div>'
-    + (x.status === 'failed' && r.diagnosis ? '<div class="diagnosis"><b>Why it failed</b> <span class="muted">(local diagnoser)</span><pre>' + esc(r.diagnosis) + '</pre></div>' : '')
+  if (!tabs.some(([id]) => id === view.tab)) view.tab = 'trace';
+  const followed = (x.trace ?? []).map((t, k) => '<div class="flow-n' + (view.trace === k ? ' sel' : '') + '"><span class="num2">' + (k + 1) + '</span><div><b>' + esc(t.step) + '</b><div>' + esc(t.detail) + '</div></div></div>').join('<div class="flow-a">↓</div>');
+  const decided = (x.decisions ?? []).map((d) => '<div class="decn"><span>◆</span><div><b>' + esc(d.what) + '</b><div class="muted">because ' + esc(d.why) + '</div></div></div>').join('');
+  const files = (x.files ?? []).map((f) => '<div><a data-open="' + esc(f) + '">' + esc(f) + '</a></div>').join('');
+  const did = '<h3>Who</h3>' + whoOf([x.actor])
+    + '<h3>The steps it followed</h3>' + (followed || '<div class="muted">' + (x.actor === 'shell' ? 'One command: its output is in Output.' : x.status === 'running' ? 'Working…' : 'It did one thing: ' + esc(x.summary)) + '</div>')
+    + '<h3>The decisions it took, and why</h3>' + (decided || '<div class="muted">No choice was made here: the step had one way to go.</div>')
+    + (files ? '<h3>Files it wrote</h3>' + files : '');
+  const panes = { trace: did, code: '<pre>' + esc(x.code) + '</pre>', log: '<pre>' + esc(x.log) + '</pre>', agent: '<div class="muted">The failure as the local agent read it (in Nuclear, by dragonfly explain); the raw output is in Output.</div><pre>' + esc(x.agent) + '</pre>', input: '<pre>' + esc(x.input) + '</pre>' };
+  return '<div class="dhead">' + av(x.actor) + '<h2>' + esc(x.title) + '</h2><span class="pill"><span class="dot st-' + x.status + '"></span> ' + x.status + '</span></div>'
+    + '<div class="muted">' + esc(s.title) + ' · ' + esc(x.id) + (dur(x) ? ' · ' + dur(x) : '') + (x.tool ? ' · tool ' + esc(x.tool) : '') + '</div>'
+    + '<div class="sum">' + esc(x.summary) + '</div>'
+    + '<div class="acts">' + (r.status !== 'running' ? '<button id="retryStep" class="primary" title="This step and every step after it run again, whether it passed or failed; the steps before it are kept and what the others wrote is undone first">↻ Run again from this step</button>' : '') + (x.file ? '<button data-open="' + esc(x.file) + '">Open ' + esc(x.file.split('/').pop()) + '</button>' : '') + '</div>'
+    + (x.status === 'failed' && r.diagnosis && failedStep(r)?.x.id === x.id ? '<div class="diagnosis"><b>Why it failed</b> <span class="muted">(local diagnoser)</span><pre>' + esc(r.diagnosis) + '</pre></div>' : '')
     + '<div class="dtabs">' + tabs.map(([id, n]) => '<button data-tab="' + id + '" class="' + (view.tab === id ? 'sel' : '') + '">' + n + '</button>').join('') + '</div>' + panes[view.tab];
 }
 
-function draw() { drawChrome(); if (view.mode === 'form') drawForm(); else drawRun(); }
-function origin(el) { const r = el.getBoundingClientRect(); const m = $('#main').getBoundingClientRect(); view.ox = (r.left + r.width / 2 - m.left) + 'px'; view.oy = (r.top + r.height / 2 - m.top + $('#main').scrollTop) + 'px'; }
+function draw() { drawChrome(); $('#main').className = view.mode === 'run' && view.run ? 'run' : ''; if (view.mode === 'form') drawForm(); else drawRun(); }
 
 document.addEventListener('click', (e) => {
-  const t = e.target.closest('[data-uc],[data-src],[data-lead],[data-stage],[data-step],[data-go],[data-run],[data-tab],[data-open],[data-ci],[data-jira],[data-delcrit],[data-delpc],[data-sug],[data-ctx],button,a');
-  if (!t) { $('#ciPop').classList.remove('open'); return; }
+  const t = e.target.closest('[data-uc],[data-src],[data-lead],[data-stage],[data-over],[data-run],[data-tab],[data-open],[data-ci],[data-jira],[data-delcrit],[data-delpc],[data-sug],[data-ctx],button,a');
+  if (!t) { $('#ciPop').classList.remove('open'); if (e.target.closest('.canvas')) { Object.assign(view, { stage: null, step: null, trace: null, auto: false }); drawRun(); } return; }
   const d = t.dataset;
   if (t.id !== 'ci') $('#ciPop').classList.remove('open');
   if (d.uc) { readForm(); if (!form.description.trim() || Object.values(TEMPLATES).includes(form.description)) form.description = TEMPLATES[d.uc]; form.useCase = d.uc; return drawForm(); }
@@ -525,16 +609,15 @@ document.addEventListener('click', (e) => {
   if (d.delpc) { readForm(); form.pieces.splice(+d.delpc, 1); return drawForm(); }
   if (d.sug !== undefined && t.tagName === 'INPUT') { const p = form.suggestions[+d.sug].path; form.context = t.checked ? [...form.context, p] : form.context.filter((c) => c !== p); return; }
   if (d.ctx !== undefined && t.tagName === 'INPUT') { form.context = form.context.filter((c) => c !== d.ctx); readForm(); return drawForm(); }
-  if (d.stage) { origin(t); view.stage = d.stage; view.step = null; return drawRun(); }
-  if (d.step) { origin(t); view.step = d.step; view.tab = 'trace'; return drawRun(); }
-  if (d.go) { if (d.go === '1') { view.stage = null; view.step = null; } else view.step = null; return drawRun(); }
-  if (d.run) { view = { mode: 'run', run: S.runs.find((r) => r.id === d.run), stage: null, step: null, tab: 'trace' }; return draw(); }
+  if (d.stage) { Object.assign(view, { stage: d.stage, step: d.step ?? null, trace: d.trace === undefined ? null : +d.trace, auto: false }); if (d.trace !== undefined) view.tab = 'trace'; return drawRun(); }
+  if (d.over) { Object.assign(view, { stage: null, step: null, trace: null, auto: false }); return drawRun(); }
+  if (d.run) { view = { mode: 'run', run: S.runs.find((r) => r.id === d.run), stage: null, step: null, trace: null, tab: 'trace', auto: true }; return draw(); }
   if (d.tab) { view.tab = d.tab; return drawRun(); }
   if (d.open) return vscode.postMessage({ type: 'open', file: d.open });
   if (d.ci) return vscode.postMessage({ type: 'exportCi', provider: d.ci });
   if (d.jira) { $('#jiraKey') && ($('#jiraKey').value = d.jira); return vscode.postMessage({ type: 'jira', key: d.jira }); }
   switch (t.id) {
-    case 'new': view = { mode: 'form', run: null, stage: null, step: null, tab: 'trace' }; return draw();
+    case 'new': view = { mode: 'form', run: null, stage: null, step: null, trace: null, tab: 'trace', auto: true }; return draw();
     case 'ci': return $('#ciPop').classList.toggle('open');
     case 'config': return vscode.postMessage({ type: 'config' });
     case 'addCrit': readForm(); form.criteria.push(''); drawForm(); return document.querySelector('[data-crit="' + (form.criteria.length - 1) + '"]')?.focus();
@@ -549,13 +632,15 @@ document.addEventListener('click', (e) => {
     case 'reset': form = blank(); return drawForm();
     case 'start': { const s = specOf(); if (!s.title) return toast('The spec needs a title.', true); if (!s.criteria.length) return toast('Add at least one acceptance criterion: it is how the run knows it is done.', true); return vscode.postMessage({ type: 'start', spec: s }); }
     case 'stop': return vscode.postMessage({ type: 'stop', id: view.run.id });
-    case 'retry': return vscode.postMessage({ type: 'retry', id: view.run.id, step: true });
-    case 'retryStage': return vscode.postMessage({ type: 'retry', id: view.run.id, step: false });
+    case 'retry': view.auto = true; return vscode.postMessage({ type: 'retry', id: view.run.id, step: true });
+    case 'retryStep': { const step = view.step; view.auto = true; return vscode.postMessage({ type: 'retry', id: view.run.id, step }); }
+    case 'retryStage': { const stage = view.stage; view.auto = true; return vscode.postMessage({ type: 'retry', id: view.run.id, stage, step: false }); }
+    case 'scratch': view.auto = true; return vscode.postMessage({ type: 'retry', id: view.run.id, scratch: true });
   }
 });
 document.addEventListener('keydown', (e) => {
-  if ((e.key === 'Enter' || e.key === ' ') && e.target.matches('.card,.node,.stepn,.run-item')) { e.preventDefault(); e.target.click(); }
-  if (e.key === 'Escape' && view.mode === 'run') { if (view.step) view.step = null; else view.stage = null; drawRun(); }
+  if ((e.key === 'Enter' || e.key === ' ') && e.target.matches('.card,.gnode,.accept,.run-item')) { e.preventDefault(); e.target.click(); }
+  if (e.key === 'Escape' && view.mode === 'run') { if (view.step) Object.assign(view, { step: null, trace: null, auto: false }); else Object.assign(view, { stage: null, auto: false }); drawRun(); }
 });
 $('#project').addEventListener('change', (e) => vscode.postMessage({ type: 'project', root: e.target.value }));
 let suggestTimer;
@@ -564,7 +649,7 @@ document.addEventListener('input', (e) => { if (e.target.id === 'desc' || e.targ
 window.addEventListener('message', (e) => {
   const m = e.data;
   if (m.type === 'state') { S = m; if (view.run) view.run = S.runs.find((r) => r.id === view.run.id) ?? view.run; if (view.mode === 'form' && !form.suggestions.length) vscode.postMessage({ type: 'suggest', text: form.title + ' ' + form.description }); draw(); }
-  if (m.type === 'run') { const i = S.runs.findIndex((r) => r.id === m.run.id); if (i >= 0) S.runs[i] = m.run; else S.runs.unshift(m.run); if (m.select) view = { mode: 'run', run: m.run, stage: null, step: null, tab: 'trace' }; if (view.run?.id === m.run.id) view.run = m.run; draw(); }
+  if (m.type === 'run') { const i = S.runs.findIndex((r) => r.id === m.run.id); if (i >= 0) S.runs[i] = m.run; else S.runs.unshift(m.run); if (m.select) view = { mode: 'run', run: m.run, stage: null, step: null, trace: null, tab: 'trace', auto: true }; if (view.run?.id === m.run.id) view.run = m.run; draw(); }
   if (m.type === 'suggestions') { form.suggestions = m.list; if (!form.context.length) form.context = m.list.filter((s) => s.kind === 'agents').map((s) => s.path); if (view.mode === 'form') { readForm(); drawForm(); } }
   if (m.type === 'issue') { readForm(); const i = m.issue; form.title = i.title; form.description = i.description; form.criteria = i.criteria.length ? i.criteria : ['']; form.source = { kind: m.source, key: i.key, url: i.url }; form.srcTab = 'write'; drawForm(); toast('Imported ' + i.key + (i.criteria.length ? ' with ' + i.criteria.length + ' criteria' : ': add its acceptance criteria')); vscode.postMessage({ type: 'suggest', text: i.title + ' ' + i.description }); }
   if (m.type === 'mine') { form.mine = m.issues; drawForm(); }

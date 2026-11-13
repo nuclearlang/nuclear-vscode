@@ -2,7 +2,7 @@
   "name": "nuclearlang",
   "displayName": "NuclearLang",
   "description": "NuclearLang (.nuc) support: the Nuclear workspace (projects as tabs, tools full screen, keyboard first), language server, semantic highlighting, code metrics, the Dragonfly dialects (flutter, fastapi, nestjs, react) and the Chernobyl theme",
-  "version": "0.48.0",
+  "version": "0.49.0",
   "publisher": "nuclearlang",
   "license": "Apache-2.0",
   "icon": "icons/icon.png",

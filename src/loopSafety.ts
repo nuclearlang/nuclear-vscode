@@ -5,6 +5,7 @@
 // what it left incomplete is undone, and it goes on from the step where it stopped. No VS Code import: the CLI and the
 // tests use it too.
 import { execFile } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -91,14 +92,25 @@ export interface Write {
   step: string;
   before: string | null;
   at: number;
+  /** The digest of what the run wrote: a file someone changed since is theirs, and is not undone. */
+  after?: string;
 }
 
-/** Undoes the writes of the steps that did not pass (newest first): their files go back to what they were. */
-export function rollback(root: string, writes: Write[], passed: (step: string) => boolean): string[] {
+export function digest(text: string): string {
+  return createHash('sha1').update(text).digest('hex');
+}
+
+/** Undoes the writes of the steps that did not pass (newest first): their files go back to what they were. A file
+ * changed since the run wrote it is left as it is and named in `changed`. */
+export function rollback(root: string, writes: Write[], passed: (step: string) => boolean, changed: string[] = []): string[] {
   const undone: string[] = [];
   for (const w of [...writes].reverse()) {
     if (passed(w.step)) continue;
     const file = path.join(root, w.path);
+    if (w.after && fs.existsSync(file) && digest(fs.readFileSync(file, 'utf8')) !== w.after) {
+      if (!changed.includes(w.path)) changed.push(w.path);
+      continue;
+    }
     if (w.before === null) fs.rmSync(file, { force: true });
     else atomicWrite(file, w.before);
     undone.push(w.path);
@@ -174,7 +186,7 @@ export async function checkConnections(n: Needs, env: NodeJS.ProcessEnv = proces
   for (const f of n.folders) {
     try {
       const mb = freeMb(f);
-      out.push({ name: `disk ${f}`, ok: mb >= n.minFreeMb, detail: `${mb} MB free${mb >= n.minFreeMb ? '' : ` (at least ${n.minFreeMb} MB are needed: free some space)`}` });
+      out.push({ name: `disk ${f}`, ok: mb >= n.minFreeMb, detail: `${mb} MB free in ${f}${mb >= n.minFreeMb ? '' : ` (at least ${n.minFreeMb} MB are needed: free some space there)`}` });
     } catch {
       // a folder that does not exist yet has nothing to fill
     }

@@ -433,7 +433,11 @@ export function steps(p: Profile, root: string, u: Urls = urls()): Step[] {
   const graph: Step = {
     id: 'graph',
     title: p.coder ? 'Install the Smart Graph and the MCP server' : 'Install the MCP server',
-    run: (say) => run('uv', ['tool', 'install', '--force', '--no-progress', ...(editable ? ['--editable'] : []), `${path.join(root, 'nuclear-graph')}[${p.coder ? 'server' : 'mcp'}]`], (line) => /^[+~-] /.test(line) || say(line), { env: { UV_TOOL_BIN_DIR: binDir() } }),
+    run: async (say) => {
+      // the graph is written in Nuclear: its Python package is what `nuclear build` writes, so it is built first
+      await run('nuclear', ['build', path.join(root, 'nuclear-graph')], say, { env: toolEnv() });
+      await run('uv', ['tool', 'install', '--force', '--no-progress', ...(editable ? ['--editable'] : []), `${path.join(root, 'nuclear-graph')}[${p.coder ? 'server' : 'mcp'}]`], (line) => /^[+~-] /.test(line) || say(line), { env: { UV_TOOL_BIN_DIR: binDir() } });
+    },
   };
   if (!p.coder) {
     return [graph, {
